@@ -922,9 +922,13 @@
         "decimals": 18
       },
       {
-        "contract_address": "0x1D1498166DDCEeE616a6d99868e1E0677300056f",
+        "contract_address": "0xB53Ec4aCe420a62Cfb75aFdEba600D284777cd65",
         "chain_id": 137,
-        "decimals": 18
+        "decimals": 18,
+        "symbol": "SPACE",
+        "xERC20": "0x1D1498166DDCEeE616a6d99868e1E0677300056f",
+        "lockbox": "0x3267263E005f82A70867B567d4fF06D7e9c52eCf",
+        "lockbox_adapter": "0xa3A8901Ea3db2Ab4712AdCfa5BD91035324e73CE"
       },
       {
         "contract_address": "0x1D1498166DDCEeE616a6d99868e1E0677300056f",
