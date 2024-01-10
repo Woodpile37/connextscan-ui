@@ -22,10 +22,12 @@ import Image from '../image'
 import EnsProfile from '../profile/ens'
 import AddMetamask from '../metamask/add-button'
 import TimeSpent from '../time/timeSpent'
-import { NATIVE_WRAPPABLE_SYMBOLS, PERCENT_ROUTER_FEE } from '../../lib/config'
+import { NATIVE_WRAPPABLE_SYMBOLS, PERCENT_ROUTER_FEE, getDistributors } from '../../lib/config'
 import { getChainData, getAssetData, getContractData } from '../../lib/object'
 import { formatUnits, isNumber } from '../../lib/number'
 import { split, toArray, ellipse, equalsIgnoreCase } from '../../lib/utils'
+
+const MAX_RETRY = 10
 
 export default () => {
   const { preferences, chains, assets, dev, latest_bumped_transfers } = useSelector(state => ({ preferences: state.preferences, chains: state.chains, assets: state.assets, dev: state.dev, latest_bumped_transfers: state.latest_bumped_transfers }), shallowEqual)
@@ -40,12 +42,14 @@ export default () => {
   const { tx } = { ...query }
 
   const [data, setData] = useState(null)
+  const [retry, setRetry] = useState(null)
 
   useEffect(
     () => {
       const getData = async is_interval => {
         const { xcall_transaction_hash, status } = { ...data }
-        if (page_visible && sdk && tx && (!data || ![XTransferStatus.CompletedFast, XTransferStatus.CompletedSlow].includes(status) || !equalsIgnoreCase(xcall_transaction_hash, tx))) {
+        const { retryCount, retryTime } = { ...retry }
+        if (page_visible && sdk && tx && (data || !retry || (retryCount < MAX_RETRY && moment().diff(moment(retryTime), 'seconds') >= 30)) && (!data || ![XTransferStatus.CompletedFast, XTransferStatus.CompletedSlow].includes(status) || !equalsIgnoreCase(xcall_transaction_hash, tx))) {
           let response = toArray(await sdk.sdkUtils.getTransfers({ transferId: tx }))
           let _data = _.head(response)
           if (!_data) {
@@ -61,6 +65,11 @@ export default () => {
             const source_chain_data = getChainData(origin_domain, chains_data)
             const source_asset_data = getAssetData(undefined, assets_data, { chain_id: source_chain_data?.chain_id, contract_address: origin_transacting_asset })
             let source_contract_data = getContractData(source_chain_data?.chain_id, source_asset_data?.contracts)
+            // xERC20 asset
+            if (source_contract_data?.xERC20 && equalsIgnoreCase(source_contract_data.xERC20, origin_transacting_asset)) {
+              source_contract_data = { ...source_contract_data, contract_address: source_contract_data.xERC20 }
+              delete source_contract_data.next_asset
+            }
             // next asset
             if (source_contract_data?.next_asset && equalsIgnoreCase(source_contract_data.next_asset.contract_address, origin_transacting_asset)) {
               source_contract_data = { ...source_contract_data, ...source_contract_data.next_asset }
@@ -80,6 +89,11 @@ export default () => {
             const _contract_data = getContractData(destination_chain_data?.chain_id, _asset_data?.contracts)
             const destination_asset_data = getAssetData(undefined, assets_data, { chain_id: destination_chain_data?.chain_id, contract_addresses: [destination_transacting_asset, _asset_data ? (receive_local ? _contract_data?.next_asset : _contract_data)?.contract_address : destination_local_asset] })
             let destination_contract_data = getContractData(destination_chain_data?.chain_id, destination_asset_data?.contracts)
+            // xERC20 asset
+            if (destination_contract_data?.xERC20 && equalsIgnoreCase(destination_contract_data.xERC20, destination_transacting_asset)) {
+              destination_contract_data = { ...destination_contract_data, contract_address: destination_contract_data.xERC20 }
+              delete destination_contract_data.next_asset
+            }
             // next asset
             if (destination_contract_data?.next_asset && (equalsIgnoreCase(destination_contract_data.next_asset.contract_address, destination_transacting_asset) || receive_local)) {
               destination_contract_data = { ...destination_contract_data, ...destination_contract_data.next_asset }
@@ -109,17 +123,27 @@ export default () => {
               errored: error_status && !execute_transaction_hash && [XTransferStatus.XCalled, XTransferStatus.Reconciled].includes(status) && !(bumped && error_status === XTransferErrorStatus.ExecutionError),
             })
           }
-          else if (!is_interval) {
-            setData(false)
+          else {
+            if (!is_interval) {
+              setData(false)
+            }
+            setRetry({ retryCount: (retryCount || 0) + 1, retryTime: moment().valueOf() })
           }
         }
       }
 
       getData()
-      const interval = setInterval(() => getData(true), 0.25 * 60 * 1000)
+      const interval = setInterval(() => getData(true), (!data ? 30 : 15) * 1000)
       return () => clearInterval(interval)
     },
-    [page_visible, sdk, tx]
+    [page_visible, sdk, tx, retry],
+  )
+
+  useEffect(
+    () => {
+      setRetry(null)
+    },
+    [tx],
   )
 
   const {
@@ -127,6 +151,7 @@ export default () => {
     source_chain_data,
     source_asset_data,
     source_decimals,
+    origin_sender,
     origin_transacting_asset,
     origin_transacting_amount,
     destination_chain_data,
@@ -161,6 +186,33 @@ export default () => {
   const id = transfer_id || tx
   const details = _.concat('xcall', routers?.length > 0 ? ['execute', 'reconcile'] : ['reconcile', 'execute']).filter(d => d !== 'reconcile' || reconcile_transaction_hash || execute_transaction_hash)
   const bumped = [XTransferErrorStatus.LowRelayerFee, XTransferErrorStatus.ExecutionError].includes(error_status) && toArray(latest_bumped_transfers_data).findIndex(d => equalsIgnoreCase(d.transfer_id, transfer_id) && moment().diff(moment(d.updated), 'minutes', true) <= 5) > -1
+  const is_from_distributor = getDistributors().findIndex(d => equalsIgnoreCase(d, origin_sender)) > -1
+  const sourceAssetComponent = (
+    <div className="flex items-center justify-center sm:justify-start xl:justify-center space-x-1 sm:space-x-2">
+      {is_from_distributor && (
+        <span className="text-lg">
+          🎉
+        </span>
+      )}
+      {source_asset_image && (
+        <Image
+          src={source_asset_image}
+          width={24}
+          height={24}
+          className="rounded-full"
+        />
+      )}
+      {Number(source_amount) >= 0 ?
+        <NumberDisplay value={source_amount} className="text-lg font-semibold" /> :
+        <Spinner width={32} height={32} />
+      }
+      {source_asset_data && source_symbol && (
+        <span className="text-base font-medium">
+          {source_symbol}
+        </span>
+      )}
+    </div>
+  )
 
   return (
     <div className="space-y-4 px-4">
@@ -177,11 +229,37 @@ export default () => {
       </div>
       <div className="space-y-6">
         {!data && typeof data === 'boolean' ?
-          <div className="h-32 flex items-center justify-center">
-            <span className="text-xl font-medium">
-              404: Transfer not found
-            </span>
-          </div> :
+          <>
+            <div className="max-w-2xl h-32 sm:h-64 flex items-center mx-auto p-3 sm:p-4">
+              <div className="flex flex-col space-y-2">
+                <span className="text-xl font-semibold">
+                  Transfer not found
+                </span>
+                <span className="text-slate-400 dark:text-slate-500 text-sm font-medium">
+                  If you just submit a new transfer, there will be a delay in displaying your transfer data here.
+                </span>
+              </div>
+            </div>
+            <div className="max-w-2xl bg-slate-50 dark:bg-slate-900 rounded flex flex-col space-y-1 mx-auto p-3 sm:p-4">
+              <span className="text-slate-600 dark:text-slate-200 text-sm font-light">
+                1. Please wait for at least 2 minutes before refreshing this page.
+              </span>
+              <span className="text-slate-600 dark:text-slate-200 text-sm font-light">
+                2. When the network is busy it can take a while for your transaction to propagate through the network and for us to index it.
+              </span>
+              <span className="text-slate-600 dark:text-slate-200 text-sm font-light">
+                {'3. If it still does not show up after at least 5 minutes, double check that you have the correct transaction ID in the URL, and '}
+                <a
+                  href="https://discord.gg/connext"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline text-blue-500 font-medium"
+                >
+                  reach out to us for support here
+                </a>.
+              </span>
+            </div>
+          </> :
           !data ?
             <div className="h-32 flex items-center justify-center">
               <Spinner width={32} height={32} />
@@ -222,31 +300,18 @@ export default () => {
                     )}
                   </div>
                   <div className="flex items-center justify-center sm:justify-start xl:justify-center space-x-1 sm:space-x-2">
-                    {source_asset_image && (
-                      <Image
-                        src={source_asset_image}
-                        width={24}
-                        height={24}
-                        className="rounded-full"
-                      />
-                    )}
-                    {Number(source_amount) >= 0 ?
-                      <NumberDisplay value={source_amount} className="text-lg font-semibold" /> :
-                      <Spinner width={32} height={32} />
+                    {is_from_distributor ?
+                      <Tooltip content="NOTE: Connext has added an additional token amount (5bps) to cover fast claiming fees for your airdrop!">
+                        {sourceAssetComponent}
+                      </Tooltip> :
+                      sourceAssetComponent
                     }
                     {source_asset_data && (
-                      <>
-                        {source_symbol && (
-                          <span className="text-base font-medium">
-                            {source_symbol}
-                          </span>
-                        )}
-                        <AddMetamask
-                          chain={source_chain_data?.id}
-                          asset={source_asset_data.id}
-                          address={source_asset_data.contract_address}
-                        />
-                      </>
+                      <AddMetamask
+                        chain={source_chain_data?.id}
+                        asset={source_asset_data.id}
+                        address={source_asset_data.contract_address}
+                      />
                     )}
                   </div>
                 </div>
@@ -315,31 +380,31 @@ export default () => {
                 <div className="grid grid-cols-1 xl:grid-cols-2 items-center gap-8 sm:gap-4 xl:gap-8">
                   <div className="order-1 sm:order-2 xl:order-1 flex flex-col sm:items-end">
                     <div className="flex items-center justify-center sm:justify-end xl:justify-center space-x-1 sm:space-x-2">
-                      {destination_asset_image && (
-                        <Image
-                          src={destination_asset_image}
-                          width={24}
-                          height={24}
-                          className="rounded-full"
-                        />
-                      )}
-                      {Number(destination_amount) >= 0 ?
-                        <NumberDisplay value={destination_amount} className="text-lg font-semibold" /> :
-                        <Spinner width={32} height={32} />
-                      }
-                      {destination_asset_data && (
-                        <>
-                          {destination_symbol && (
-                            <span className="text-base font-medium">
-                              {destination_symbol}
-                            </span>
-                          )}
-                          <AddMetamask
-                            chain={destination_chain_data?.id}
-                            asset={destination_asset_data.id}
-                            address={destination_asset_data.contract_address}
+                      <div className="flex items-center justify-center sm:justify-end xl:justify-center space-x-1 sm:space-x-2">
+                        {destination_asset_image && (
+                          <Image
+                            src={destination_asset_image}
+                            width={24}
+                            height={24}
+                            className="rounded-full"
                           />
-                        </>
+                        )}
+                        {Number(destination_amount) >= 0 ?
+                          <NumberDisplay value={destination_amount} className="text-lg font-semibold" /> :
+                          <Spinner width={32} height={32} />
+                        }
+                        {destination_asset_data && destination_symbol && (
+                          <span className="text-base font-medium">
+                            {destination_symbol}
+                          </span>
+                        )}
+                      </div>
+                      {destination_asset_data && (
+                        <AddMetamask
+                          chain={destination_chain_data?.id}
+                          asset={destination_asset_data.id}
+                          address={destination_asset_data.contract_address}
+                        />
                       )}
                     </div>
                   </div>
@@ -404,7 +469,7 @@ export default () => {
                           <HiCheckCircle size={32} className="bg-slate-100 dark:bg-slate-200 rounded-full text-green-500 dark:text-green-400" /> :
                           errored ?
                             d === 'execute' ?
-                              <ActionRequired
+                              null && <ActionRequired
                                 forceDisabled={[XTransferErrorStatus.ExecutionError, XTransferErrorStatus.NoBidsReceived].includes(error_status) || bumped}
                                 transferData={data}
                                 buttonTitle={
@@ -439,7 +504,7 @@ export default () => {
                         }
                       </div>
                     </div>
-                    {data[`${d}_transaction_hash`] && (
+                    {(data[`${d}_transaction_hash`] || data[`${d}_simulation_from`]) && (
                       toArray(
                         _.concat(
                           [

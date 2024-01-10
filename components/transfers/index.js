@@ -62,18 +62,6 @@ export default () => {
     [asPath],
   )
 
-  // useEffect(
-  //   () => {
-  //     if (fetchTrigger !== undefined) {
-  //       const qs = new URLSearchParams()
-  //       Object.entries({ ...filters }).filter(([k, v]) => v).forEach(([k, v]) => { qs.append(k, v) })
-  //       const qs_string = qs.toString()
-  //       router.push(`${pathname}${qs_string ? `?${qs_string}` : ''}`)
-  //     }
-  //   },
-  //   [fetchTrigger],
-  // )
-
   useEffect(
     () => {
       const trigger = is_interval => {
@@ -147,6 +135,11 @@ export default () => {
               const source_chain_data = getChainData(origin_domain, chains_data)
               const source_asset_data = getAssetData(undefined, assets_data, { chain_id: source_chain_data?.chain_id, contract_address: origin_transacting_asset })
               let source_contract_data = getContractData(source_chain_data?.chain_id, source_asset_data?.contracts)
+              // xERC20 asset
+              if (source_contract_data?.xERC20 && equalsIgnoreCase(source_contract_data.xERC20, origin_transacting_asset)) {
+                source_contract_data = { ...source_contract_data, contract_address: source_contract_data.xERC20 }
+                delete source_contract_data.next_asset
+              }
               // next asset
               if (source_contract_data?.next_asset && equalsIgnoreCase(source_contract_data.next_asset.contract_address, origin_transacting_asset)) {
                 source_contract_data = { ...source_contract_data, ...source_contract_data.next_asset }
@@ -166,6 +159,11 @@ export default () => {
               const _contract_data = getContractData(destination_chain_data?.chain_id, _asset_data?.contracts)
               const destination_asset_data = getAssetData(undefined, assets_data, { chain_id: destination_chain_data?.chain_id, contract_addresses: [destination_transacting_asset, _asset_data ? (receive_local ? _contract_data?.next_asset : _contract_data)?.contract_address : destination_local_asset] })
               let destination_contract_data = getContractData(destination_chain_data?.chain_id, destination_asset_data?.contracts)
+              // xERC20 asset
+              if (destination_contract_data?.xERC20 && equalsIgnoreCase(destination_contract_data.xERC20, destination_transacting_asset)) {
+                destination_contract_data = { ...destination_contract_data, contract_address: destination_contract_data.xERC20 }
+                delete destination_contract_data.next_asset
+              }
               // next asset
               if (destination_contract_data?.next_asset && (equalsIgnoreCase(destination_contract_data.next_asset.contract_address, destination_transacting_asset) || receive_local)) {
                 destination_contract_data = { ...destination_contract_data, ...destination_contract_data.next_asset }
@@ -270,7 +268,7 @@ export default () => {
               {
                 Header: 'Transfer ID',
                 accessor: 'transfer_id',
-                disableSortBy: true,
+                sortType: (a, b) => a.original.xcall_timestamp > b.original.xcall_timestamp ? 1 : -1,
                 Cell: props => {
                   const { value, row } = { ...props }
                   const { execute_transaction_hash, xcall_timestamp, execute_timestamp, routers, call_data, status, error_status, pending, errored } = { ...row.original }
@@ -358,7 +356,7 @@ export default () => {
               {
                 Header: 'Timestamp',
                 accessor: 'xcall_timestamp',
-                disableSortBy: true,
+                sortType: (a, b) => a.original.xcall_timestamp > b.original.xcall_timestamp ? 1 : -1,
                 Cell: props => {
                   const { value } = { ...props }
                   return value && (
@@ -371,7 +369,7 @@ export default () => {
               {
                 Header: 'Status',
                 accessor: 'status',
-                disableSortBy: true,
+                sortType: (a, b) => a.original.execute_timestamp && !b.original.execute_timestamp ? 1 : !a.original.execute_timestamp && b.original.execute_timestamp ? -1 : a.original.execute_timestamp - a.original.xcall_timestamp === b.original.execute_timestamp - b.original.xcall_timestamp ? a.original.xcall_timestamp > b.original.xcall_timestamp ? 1 : -1 : a.original.execute_timestamp - a.original.xcall_timestamp < b.original.execute_timestamp - b.original.xcall_timestamp ? 1 : -1,
                 Cell: props => {
                   const { value, row } = { ...props }
                   const { transfer_id, execute_transaction_hash, xcall_timestamp, execute_timestamp, routers, call_data, error_status, pending, errored } = { ...row.original }
@@ -437,7 +435,7 @@ export default () => {
               {
                 Header: 'Origin',
                 accessor: 'source_chain_data',
-                disableSortBy: true,
+                sortType: (a, b) => a.original.source_chain_data?.name > b.original.source_chain_data?.name ? 1 : -1,
                 Cell: props => {
                   const { value, row } = { ...props }
                   const { source_asset_data, xcall_caller } = { ...row.original }
@@ -514,7 +512,7 @@ export default () => {
               {
                 Header: 'Destination',
                 accessor: 'destination_chain_data',
-                disableSortBy: true,
+                sortType: (a, b) => a.original.source_chain_data?.name > b.original.source_chain_data?.name ? 1 : -1,
                 Cell: props => {
                   const { value, row } = { ...props }
                   const { destination_asset_data, to } = { ...row.original }
@@ -591,7 +589,7 @@ export default () => {
               {
                 Header: 'Xcall Status',
                 accessor: 'xcall_status',
-                disableSortBy: true,
+                sortType: (a, b) => a.original.status === XTransferStatus.CompletedFast && b.original.status !== XTransferStatus.CompletedFast ? 1 : a.original.status !== XTransferStatus.CompletedFast && b.original.status === XTransferStatus.CompletedFast ? -1 : a.original.status === XTransferStatus.CompletedSlow && ![XTransferStatus.CompletedFast, XTransferStatus.CompletedSlow].includes(b.original.status) ? 1 : b.original.status === XTransferStatus.CompletedSlow && ![XTransferStatus.CompletedFast, XTransferStatus.CompletedSlow].includes(a.original.status) ? -1 : a.original.status === XTransferStatus.XCalled ? -1 : a.original.status === XTransferStatus.Executed && ![XTransferStatus.CompletedFast, XTransferStatus.CompletedSlow, XTransferStatus.Executed].includes(b.original.status) ? 1 : -1,
                 Cell: props => {
                   const { row } = { ...props }
                   const { transfer_id, status } = { ...row.original }
@@ -610,7 +608,7 @@ export default () => {
               {
                 Header: 'Error Status',
                 accessor: 'error_status',
-                disableSortBy: true,
+                sortType: (a, b) => !a.original.error_status ? 1 : [XTransferErrorStatus.LowRelayerFee, XTransferErrorStatus.LowSlippage].includes(a.original.error_status) ? -1 : 0,
                 Cell: props => {
                   const { row } = { ...props }
                   let { value } = { ...props }
@@ -639,6 +637,7 @@ export default () => {
             data={dataFiltered}
             defaultPageSize={address ? 10 : 25}
             noPagination={dataFiltered.length <= 10}
+            noRecordPerPage={!address}
             extra={
               data.length > 0 && (
                 <div className="flex justify-center">

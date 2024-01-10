@@ -95,38 +95,6 @@
     "gas_coingecko_id": "ethereum"
   },
   {
-    "id": "arbitrum",
-    "chain_id": 421613,
-    "domain_id": "1734439522",
-    "name": "Arbitrum",
-    "short_name": "ARB",
-    "rpcs": [
-      "https://arbitrum-goerli.blockpi.network/v1/rpc/public",
-      "https://arbitrum-goerli.publicnode.com"
-    ],
-    "native_token": {
-      "name": "Ethereum",
-      "symbol": "aETH",
-      "decimals": 18
-    },
-    "explorer": {
-      "name": "Arbiscan",
-      "url": "https://goerli.arbiscan.io",
-      "icon": "/logos/explorers/arbiscan.png",
-      "block_path": "/block/{block}",
-      "address_path": "/address/{address}",
-      "contract_path": "/token/{address}",
-      "contract_0_path": "/address/{address}",
-      "transaction_path": "/tx/{tx}"
-    },
-    "image": "/logos/chains/arbitrum.png",
-    "color": "#28a0f0",
-    "unwrapper_contract": "0x18BBF96BC8014aA93cbf1A5Bce005a485b5C2C4a",
-    "group": "optimistic_rollups",
-    "coingecko_id": "arbitrum",
-    "gas_coingecko_id": "ethereum"
-  },
-  {
     "id": "linea",
     "chain_id": 59140,
     "domain_id": "1668247156",
@@ -153,19 +121,19 @@
     "image": "/logos/chains/linea.png",
     "color": "#1d1d1d",
     "unwrapper_contract": "0x2Eee7cB087c0430e40991f7E37De44Ec248a9F45",
-    "group": "zk_rollups",
     "coingecko_id": "",
-    "gas_coingecko_id": "ethereum"
+    "gas_coingecko_id": "ethereum",
+    "no_staging": true
   },
   {
-    "id": "zksync",
-    "chain_id": 280,
-    "domain_id": "2053862260",
-    "name": "zkSync",
-    "short_name": "ZKSYNC",
+    "id": "polygon-zkevm",
+    "chain_id": 1442,
+    "domain_id": "1887071092",
+    "name": "Polygon zkEVM",
+    "short_name": "POLYZK",
     "rpcs": [
-      "https://testnet.era.zksync.dev",
-      "https://zksync-era-testnet.blockpi.network/v1/rpc/public"
+      "https://polygon-zkevm-testnet.blockpi.network/v1/rpc/public",
+      "https://rpc.public.zkevm-test.net"
     ],
     "native_token": {
       "name": "Ethereum",
@@ -173,7 +141,39 @@
       "decimals": 18
     },
     "explorer": {
-      "name": "zkSync",
+      "name": "Polygonscan",
+      "url": "https://testnet-zkevm.polygonscan.com",
+      "icon": "/logos/explorers/polygonscan.png",
+      "block_path": "/block/{block}",
+      "address_path": "/address/{address}",
+      "contract_path": "/token/{address}",
+      "contract_0_path": "/address/{address}",
+      "transaction_path": "/tx/{tx}"
+    },
+    "image": "/logos/chains/polygon-zkevm.png",
+    "color": "#8247e5",
+    "unwrapper_contract": "",
+    "coingecko_id": "polygon",
+    "gas_coingecko_id": "ethereum",
+    "disabled": true
+  },
+  {
+    "id": "zksync",
+    "chain_id": 280,
+    "domain_id": "2053862260",
+    "name": "ZKSync",
+    "short_name": "ZKSYNC",
+    "rpcs": [
+      "https://zksync-era-testnet.blockpi.network/v1/rpc",
+      "https://testnet.era.zksync.dev"
+    ],
+    "native_token": {
+      "name": "Ethereum",
+      "symbol": "ETH",
+      "decimals": 18
+    },
+    "explorer": {
+      "name": "ZKSync",
       "url": "https://goerli.explorer.zksync.io",
       "icon": "/logos/explorers/zksync.png",
       "block_path": "/block/{block}",
@@ -185,8 +185,37 @@
     "image": "/logos/chains/zksync.png",
     "color": "#12142b",
     "unwrapper_contract": "",
-    "group": "zk_rollups",
-    "coingecko_id": "",
+    "coingecko_id": "zksync",
     "gas_coingecko_id": "ethereum"
+  },
+  {
+    "id": "x1",
+    "chain_id": 195,
+    "domain_id": "2016506996",
+    "name": "X1",
+    "short_name": "X1",
+    "rpcs": [
+      "https://testrpc.x1.tech",
+      "https://x1testrpc.okx.com"
+    ],
+    "native_token": {
+      "name": "OKB",
+      "symbol": "OKB",
+      "decimals": 18
+    },
+    "explorer": {
+      "name": "OKB",
+      "url": "https://www.oklink.com/x1-test",
+      "icon": "/logos/explorers/x1.png",
+      "block_path": "/block/{block}",
+      "address_path": "/address/{address}",
+      "contract_path": "/address/{address}",
+      "contract_0_path": "/address/{address}",
+      "transaction_path": "/tx/{tx}"
+    },
+    "image": "/logos/chains/x1.png",
+    "color": "#000000",
+    "unwrapper_contract": "",
+    "coingecko_id": "okb"
   }
 ]

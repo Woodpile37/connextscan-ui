@@ -1,3 +1,4 @@
+import { useRouter } from 'next/router'
 import { useState, useEffect } from 'react'
 import { useSelector, useDispatch, shallowEqual } from 'react-redux'
 import { XTransferErrorStatus } from '@connext/nxtp-utils'
@@ -8,6 +9,7 @@ import _ from 'lodash'
 import { TiArrowRight } from 'react-icons/ti'
 import { MdClose } from 'react-icons/md'
 import { BiX, BiEditAlt, BiCheckCircle } from 'react-icons/bi'
+import { TbLogout } from 'react-icons/tb'
 
 import WarningSlippage from './warning/slippage'
 import Spinner from '../spinner'
@@ -20,7 +22,7 @@ import Wallet from '../wallet'
 import { NETWORK, RELAYER_FEE_ASSET_TYPES, PERCENT_ROUTER_FEE, GAS_LIMIT_ADJUSTMENT, DEFAULT_PERCENT_BRIDGE_SLIPPAGE } from '../../lib/config'
 import { getChainData, getAssetData, getContractData } from '../../lib/object'
 import { toBigNumber, toFixedNumber, formatUnits, parseUnits, isNumber } from '../../lib/number'
-import { toArray, includesStringList, numberToFixed, ellipse, equalsIgnoreCase, normalizeMessage, parseError } from '../../lib/utils'
+import { toArray, includesStringList, numberToFixed, ellipse, equalsIgnoreCase, sleep, normalizeMessage, parseError } from '../../lib/utils'
 import { LATEST_BUMPED_TRANSFERS_DATA } from '../../reducers/types'
 
 export default (
@@ -41,6 +43,8 @@ export default (
   const { sdk } = { ...dev }
   const { wallet_data } = { ...wallet }
   const { chain_id, ethereum_provider, signer, address } = { ...wallet_data }
+
+  const router = useRouter()
 
   const [hidden, setHidden] = useState(initialHidden)
   const [data, setData] = useState(null)
@@ -106,13 +110,18 @@ export default (
     [data, chains_data, assets_data],
   )
 
-  const { transfer_id, error_status, origin_domain, origin_transacting_asset, origin_transacting_amount, destination_domain, destination_transacting_asset, destination_local_asset, slippage, relayer_fees, receive_local, delegate } = { ...data }
+  const { transfer_id, error_status, origin_domain, origin_transacting_asset, origin_transacting_amount, destination_domain, destination_transacting_asset, destination_local_asset, slippage, updated_slippage, relayer_fees, receive_local, delegate } = { ...data }
   let { relayer_fee } = { ...data }
 
   const source_chain_data = getChainData(origin_domain, chains_data)
   const source_asset_data = getAssetData(undefined, assets_data, { chain_id: source_chain_data?.chain_id, contract_address: origin_transacting_asset })
   let source_contract_data = getContractData(source_chain_data?.chain_id, source_asset_data?.contracts)
   const _source_contract_data = _.cloneDeep(source_contract_data)
+  // xERC20 asset
+  if (source_contract_data?.xERC20 && equalsIgnoreCase(source_contract_data.xERC20, origin_transacting_asset)) {
+    source_contract_data = { ...source_contract_data, contract_address: source_contract_data.xERC20 }
+    delete source_contract_data.next_asset
+  }
   // next asset
   if (source_contract_data?.next_asset && equalsIgnoreCase(source_contract_data.next_asset.contract_address, origin_transacting_asset)) {
     source_contract_data = { ...source_contract_data, ...source_contract_data.next_asset }
@@ -138,6 +147,11 @@ export default (
   const destination_asset_data = getAssetData(undefined, assets_data, { chain_id: destination_chain_data?.chain_id, contract_addresses: [destination_transacting_asset, _asset_data ? (receive_local ? _contract_data?.next_asset : _contract_data)?.contract_address : destination_local_asset] })
   let destination_contract_data = getContractData(destination_chain_data?.chain_id, destination_asset_data?.contracts)
   const _destination_contract_data = _.cloneDeep(destination_contract_data)
+  // xERC20 asset
+  if (destination_contract_data?.xERC20 && equalsIgnoreCase(destination_contract_data.xERC20, destination_transacting_asset)) {
+    destination_contract_data = { ...destination_contract_data, contract_address: destination_contract_data.xERC20 }
+    delete destination_contract_data.next_asset
+  }
   // next asset
   if (destination_contract_data?.next_asset && (equalsIgnoreCase(destination_contract_data.next_asset.contract_address, destination_transacting_asset) || receive_local)) {
     destination_contract_data = { ...destination_contract_data, ...destination_contract_data.next_asset }
@@ -154,7 +168,7 @@ export default (
   const destination_decimals = destination_contract_data?.decimals || 18
   const destination_asset_image = destination_contract_data?.image || destination_asset_data?.image
 
-  const _slippage = slippage / 100
+  const _slippage = updated_slippage ? updated_slippage / 100 : slippage / 100
   const estimatedSlippage = estimatedValues?.destinationSlippage && estimatedValues.originSlippage ? Number(numberToFixed(Number(estimatedValues.destinationSlippage) + Number(estimatedValues.originSlippage), 2)) : null
 
   const gas_token_data = toArray(gas_tokens_price_data).find(d => equalsIgnoreCase(d.asset_id, source_gas?.symbol))
@@ -316,7 +330,7 @@ export default (
         setEstimatedValues(_estimatedValues)
       }
 
-      const _newSlippage = _estimatedValues?.destinationSlippage && _estimatedValues.originSlippage ? Number(numberToFixed(Number(_estimatedValues.destinationSlippage) + Number(_estimatedValues.originSlippage), 2)) : null
+      const _newSlippage = _estimatedValues?.destinationSlippage ? Number(numberToFixed(Number(_estimatedValues.destinationSlippage), 2)) : null
       setNewSlippage(_newSlippage > 0 ? _newSlippage > _slippage ? _newSlippage : _slippage + 0.1 : DEFAULT_PERCENT_BRIDGE_SLIPPAGE)
     }
   }
@@ -373,7 +387,7 @@ export default (
                 if (!equalsIgnoreCase(delegate, address)) {
                   message = 'Must update slippage with delegate'
                   setUpdateResponse({ status: 'failed', ...response, message })
-                  break 
+                  break
                 }
               default:
                 setUpdateResponse({ status: 'failed', ...response })
@@ -397,7 +411,7 @@ export default (
                 const contract_address = (equalsIgnoreCase(source_contract_data?.contract_address, ZeroAddress) ? _source_contract_data : source_contract_data)?.contract_address
                 const amount = params.relayerFee
                 const infinite_approve = false
-    
+
                 console.log('[action required]', '[approveIfNeeded before bumpTransfer]', { domain_id, contract_address, amount, infinite_approve })
                 const request = await sdk.sdkBase.approveIfNeeded(domain_id, contract_address, amount, infinite_approve)
                 if (request) {
@@ -480,7 +494,17 @@ export default (
 
   const disabled = forceDisabled || updating
   const wrong_chain = chain_id !== chain_data?.chain_id && !updateResponse
-  const is_walletconnect = ethereum_provider?.constructor?.name === 'WalletConnectProvider'
+
+  const disconnectButton = (
+    <Wallet>
+      <div className="flex items-center justify-center space-x-1">
+        <TbLogout size={18} className="3xl:w-6 3xl:h-6 text-slate-500 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-300" />
+        <span className="text-slate-500 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-300">
+          Disconnect
+        </span>
+      </div>
+    </Wallet>
+  )
 
   return data && buttonTitle && (
     <Modal
@@ -669,23 +693,32 @@ export default (
           }
           {ethereum_provider && (wrong_chain || isNumber(error_status === XTransferErrorStatus.LowSlippage ? newSlippage : error_status === XTransferErrorStatus.LowRelayerFee ? newRelayerFee : null)) ?
             wrong_chain ?
-              <Wallet
-                connectChainId={chain_data?.chain_id}
-                className="w-full bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 rounded flex items-center justify-center text-white text-base font-medium space-x-1.5 sm:space-x-2 py-3 sm:py-4 px-2 sm:px-3"
-              >
-                <span>{is_walletconnect ? 'Reconnect' : 'Switch'} to</span>
-                {chain_data?.image && (
-                  <Image
-                    src={chain_data.image}
-                    width={28}
-                    height={28}
-                    className="rounded-full"
-                  />
-                )}
-                <span className="font-semibold">
-                  {chain_data?.name}
-                </span>
-              </Wallet> :
+              <div className="flex flex-col items-end space-y-2">
+                <Wallet
+                  connectChainId={chain_data?.chain_id}
+                  onSwitch={
+                    async () => {
+                      await sleep(1000)
+                      router.reload()
+                    }
+                  }
+                  className="w-full bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 rounded flex items-center justify-center text-white text-base font-medium space-x-1.5 sm:space-x-2 py-3 sm:py-4 px-2 sm:px-3"
+                >
+                  <span>Switch to</span>
+                  {chain_data?.image && (
+                    <Image
+                      src={chain_data.image}
+                      width={28}
+                      height={28}
+                      className="rounded-full"
+                    />
+                  )}
+                  <span className="font-semibold">
+                    {chain_data?.name}
+                  </span>
+                </Wallet>
+                {disconnectButton}
+              </div> :
               !updateResponse && !updating && isNumber(error_status === XTransferErrorStatus.LowSlippage ? newSlippage : error_status === XTransferErrorStatus.LowRelayerFee ? newRelayerFee : null) && (error_status === XTransferErrorStatus.LowSlippage ? newSlippage <= _slippage : error_status === XTransferErrorStatus.LowRelayerFee ? !newRelayerFee : null) ?
                 <Alert status="failed" closeDisabled={true}>
                   <span>
@@ -706,21 +739,24 @@ export default (
                         </span>
                       </div>
                     </Alert> :
-                    <button
-                      disabled={disabled}
-                      onClick={
-                        () => {
-                          setSlippageEditing(false)
-                          update()
+                    <div className="flex flex-col items-end space-y-2">
+                      <button
+                        disabled={disabled}
+                        onClick={
+                          () => {
+                            setSlippageEditing(false)
+                            update()
+                          }
                         }
-                      }
-                      className={`w-full ${disabled ? 'bg-blue-400 dark:bg-blue-500' : 'bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700'} rounded flex items-center justify-center text-white text-base py-3 sm:py-4 px-2 sm:px-3`}
-                    >
-                      <span className={`flex items-center justify-center ${updating && updateProcessing ? 'space-x-3 ml-1.5' : 'space-x-3'}`}>
-                        {disabled && <div><Spinner width={20} height={20} color="white" /></div>}
-                        <span>{updating ? updateProcessing ? 'Update in progress ...' : 'Please Confirm' : 'Apply'}</span>
-                      </span>
-                    </button> :
+                        className={`w-full ${disabled ? 'bg-blue-400 dark:bg-blue-500' : 'bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700'} rounded flex items-center justify-center text-white text-base py-3 sm:py-4 px-2 sm:px-3`}
+                      >
+                        <span className={`flex items-center justify-center ${updating && updateProcessing ? 'space-x-3 ml-1.5' : 'space-x-3'}`}>
+                          {disabled && <div><Spinner width={20} height={20} color="white" /></div>}
+                          <span>{updating ? updateProcessing ? 'Update in progress ...' : 'Please Confirm' : 'Apply'}</span>
+                        </span>
+                      </button>
+                      {disconnectButton}
+                    </div> :
                   toArray(updateResponse || estimateResponse).map((d, i) => {
                     const { status, message, tx_hash } = { ...d }
                     return (
@@ -767,12 +803,15 @@ export default (
                     )
                   }) :
             ethereum_provider ?
-              <button
-                disabled={true}
-                className="w-full bg-slate-100 dark:bg-slate-800 cursor-not-allowed rounded text-slate-400 dark:text-slate-500 text-base text-center py-3 sm:py-4 px-2 sm:px-3"
-              >
-                <span>Apply</span>
-              </button> :
+              <div className="flex flex-col items-end space-y-2">
+                <button
+                  disabled={true}
+                  className="w-full bg-slate-100 dark:bg-slate-800 cursor-not-allowed rounded text-slate-400 dark:text-slate-500 text-base text-center py-3 sm:py-4 px-2 sm:px-3"
+                >
+                  <span>Apply</span>
+                </button>
+                 {disconnectButton}
+              </div> :
               <Wallet
                 connectChainId={chain_data?.chain_id}
                 buttonConnectTitle="Connect Wallet"

@@ -16,6 +16,7 @@ export default (
     chain,
     destinationChain,
     isBridge = false,
+    isRouterLiquidity = false,
     isPool = false,
     showNextAssets = false,
     showNativeAssets = false,
@@ -74,27 +75,27 @@ export default (
         }),
       )
     ) :
-    toArray(assets_data).filter(d => !isBridge || (
+    toArray(assets_data).filter(d => !(isBridge || isRouterLiquidity) || (
       toArray(d.contracts).findIndex(c => c.chain_id === chain_id && c.is_bridge !== false) > -1 &&
       (!destinationChain || (!toArray(d.exclude_destination_chains).includes(destinationChain) && !toArray(d.exclude_source_chains).includes(chain)))
     ))
   ).filter(d => !d.disabled)
   const assets_data_sorted = _.orderBy(
     toArray(_assets_data).filter(d => !inputSearch || d).flatMap(d => {
-      const { symbol, image, contracts } = { ...d }
+      const { symbol, image, is_alchemix, contracts } = { ...d }
       const contract_data = getContractData(chain_id, contracts)
-      const { next_asset, wrappable } = { ...contract_data }
+      const { contract_address, xERC20, next_asset, wrappable, liquidity_disabled } = { ...contract_data }
 
       const contracts_data = toArray(
         _.concat(
-          wrappable && isBridge && (showNativeAssets || showOnlyWrappable) && {
+          wrappable && (isBridge || (isRouterLiquidity && !liquidity_disabled)) && (showNativeAssets || showOnlyWrappable) && {
             ...contract_data,
             contract_address: ZeroAddress,
             symbol: symbol === 'DAI' ? `X${symbol}` : symbol,
             image: image?.replace('/dai.', '/xdai.'),
           },
-          (!showOnlyWrappable || wrappable) && { ...contract_data },
-          next_asset && isBridge && showNextAssets && {
+          (!showOnlyWrappable || wrappable) && (!isRouterLiquidity || !next_asset) && (!is_alchemix || isRouterLiquidity) && { ...contract_data, contract_address: xERC20 || contract_address },
+          next_asset && (isBridge || (isRouterLiquidity && !liquidity_disabled)) && showNextAssets && {
             ...contract_data,
             ...next_asset,
             is_next_asset: true,
@@ -137,15 +138,37 @@ export default (
       )
     })
     .map(d => {
-      const { is_next_asset, group, scores } = { ...d }
+      const { is_next_asset, is_xERC20, is_alchemix, group, scores } = { ...d }
       return {
         ...d,
-        group: group || (is_next_asset ? 'NextAssets' : ''),
+        group: group || (is_next_asset ? 'next_assets' : is_xERC20 ? 'xerc20' : is_alchemix ? 'alchemix' : ''),
         max_score: _.max(scores),
       }
     })
+    .map(d => {
+      const { group } = { ...d }
+      let group_index = !group ? -1 : null
+      switch (group) {
+        case 'next_assets':
+          group_index = 0
+          break
+        case 'xerc20':
+          group_index = 1
+          break
+        case 'alchemix':
+          group_index = 2
+          break
+        case 'other_tokens':
+          group_index = 100
+          break
+        default:
+          group_index = typeof group_index === 'number' ? group_index : 99
+          break
+      }
+      return { ...d, group_index }
+    })
     .filter(d => d.max_score > 1 / 10),
-    ['group', 'max_score'], ['asc', 'desc'],
+    ['group_index', 'group', 'max_score'], ['asc', 'asc', 'desc'],
   )
   const preset_assets_data = _.uniqBy(toArray(_assets_data).filter(d => d.preset), 'id')
 
@@ -165,7 +188,7 @@ export default (
                     let { contract_address, symbol } = { ...contract_data }
                     contract_address = wrappable ? ZeroAddress : contract_address
                     symbol = wrappable ? d.symbol : symbol
-                    onSelect(id, isBridge ? symbol : contract_address)
+                    onSelect(id, isBridge || isRouterLiquidity ? symbol : contract_address)
                   }
                 }
                 className="hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded cursor-pointer flex items-center hover:font-semibold space-x-1 mr-1.5 py-1 px-1.5"
@@ -190,12 +213,12 @@ export default (
         {assets_data_sorted.map((d, i) => {
           const { id, name, contracts, group, disabled } = { ...d }
           const contract_data = getContractData(chain_id, contracts)
-          const { contract_address } = { ...contract_data }
+          const { contract_address, xERC20 } = { ...contract_data }
           let { symbol, image } = { ...contract_data }
           symbol = symbol || d.symbol || name
           image = image || d.image
 
-          const selected = data?.contract_address ? equalsIgnoreCase(contract_address, data.contract_address) : id === value
+          const selected = data?.contract_address ? equalsIgnoreCase(contract_address, data.contract_address) : id === value && (!symbol || !data?.symbol || equalsIgnoreCase(symbol, data.symbol))
           const header = group && !equalsIgnoreCase(group, assets_data_sorted[i - 1]?.group) && (
             <div className={`text-slate-400 dark:text-slate-500 text-xs mt-${i === 0 ? 0.5 : 3} mb-2 ml-2`}>
               {getTitle(group)}
@@ -214,18 +237,23 @@ export default (
               <span className={`whitespace-nowrap text-base ${selected ? 'font-bold' : 'font-medium'}`}>
                 {symbol}
               </span>
+              {xERC20 && equalsIgnoreCase(contract_address, xERC20) && (
+                <span className="whitespace-nowrap text-base font-medium">
+                  (xERC20)
+                </span>
+              )}
             </div>
           )
-          const className = `dropdown-item ${disabled/* || !contract_data*/ ? 'cursor-not-allowed text-slate-400 dark:text-slate-600' : selected ? 'bg-slate-100 dark:bg-slate-800 cursor-pointer' : 'hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer'} rounded flex items-center justify-between space-x-2 my-1 p-2`
+          const className = `dropdown-item ${disabled ? 'cursor-not-allowed text-slate-400 dark:text-slate-600' : selected ? 'bg-slate-100 dark:bg-slate-800 cursor-pointer' : 'hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer'} rounded flex items-center justify-between space-x-2 my-1 p-2`
 
           return (
             <div key={i}>
               {header}
-              {disabled/* || !contract_data*/ ?
+              {disabled ?
                 <div title={contract_data ? 'Disabled' : 'Not Support'} className={className}>
                   {item}
                 </div> :
-                <div onClick={() => onSelect(id, isBridge ? symbol : contract_address)} className={className}>
+                <div onClick={() => onSelect(id, isBridge || isRouterLiquidity ? symbol : contract_address)} className={className}>
                   {item}
                 </div>
               }

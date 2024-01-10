@@ -6,7 +6,6 @@ import parse from 'html-react-parser'
 import { BiX, BiChevronDown } from 'react-icons/bi'
 
 import Search from './search'
-import Spinner from '../../spinner'
 import Image from '../../image'
 import Modal from '../../modal'
 import { chainName, getChainData, getAssetData, getContractData } from '../../../lib/object'
@@ -21,6 +20,7 @@ export default (
     destinationChain,
     origin = '',
     isBridge = false,
+    isRouterLiquidity = false,
     isPool = false,
     showNextAssets = false,
     showNativeAssets = false,
@@ -83,6 +83,11 @@ export default (
       <span className="whitespace-nowrap text-sm sm:text-base font-semibold">
         {symbol}
       </span>
+      {contract_data?.xERC20 && (
+        <span className="whitespace-nowrap text-sm sm:text-base font-medium">
+          (xERC20)
+        </span>
+      )}
       {/*!fixed && <BiChevronDown size={18} className="3xl:w-6 3xl:h-6 text-slate-400 dark:text-slate-200" />*/}
       {canClose && value && (
         <div onClick={() => onClick(null)} className="cursor-pointer">
@@ -98,7 +103,7 @@ export default (
       hidden={hidden}
       disabled={disabled || fixed}
       onClick={open => setHidden(!open)}
-      buttonTitle={_assets_data ? buttonComponent : null/*<Spinner name="Puff" />*/}
+      buttonTitle={_assets_data ? buttonComponent : null}
       buttonClassName={className || `min-w-max h-10 sm:h-12 ${disabled ? 'cursor-not-allowed' : ''} flex items-center justify-center`}
       ignoreSVG={canClose}
       title={
@@ -135,6 +140,7 @@ export default (
           chain={chain}
           destinationChain={destinationChain}
           isBridge={isBridge}
+          isRouterLiquidity={isRouterLiquidity}
           isPool={isPool}
           showNextAssets={showNextAssets}
           showNativeAssets={showNativeAssets}
@@ -146,18 +152,16 @@ export default (
     />
   )
 
-  return (
-    tooltip && equalsIgnoreCase(asset_data?.contract_address, contract_data?.contract_address) ?
-      <Popover open={openPopover} handler={setOpenPopover}>
-        <PopoverHandler {...triggers}>
-          <div>{component}</div>
-        </PopoverHandler>
-        <PopoverContent {...triggers} className="linkify z-50 bg-dark border-black text-white text-xs">
-          <Linkify>
-            {parse(tooltip)}
-          </Linkify>
-        </PopoverContent>
-      </Popover> :
-      component
-  )
+  return tooltip && equalsIgnoreCase(asset_data?.contract_address, contract_data?.contract_address) ?
+    <Popover open={openPopover} handler={setOpenPopover}>
+      <PopoverHandler {...triggers}>
+        <div>{component}</div>
+      </PopoverHandler>
+      <PopoverContent {...triggers} className="linkify z-50 bg-dark border-black text-white text-xs">
+        <Linkify>
+          {parse(tooltip)}
+        </Linkify>
+      </PopoverContent>
+    </Popover> :
+    component
 }

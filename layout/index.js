@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { useSelector, useDispatch, shallowEqual } from 'react-redux'
 import PageVisibility from 'react-page-visibility'
 import { create } from '@connext/sdk-core'
+import { constants } from 'ethers'
+const { AddressZero: ZeroAddress } = { ...constants }
 import _ from 'lodash'
 
 import Navbar from '../components/navbar'
@@ -11,45 +13,16 @@ import Footer from '../components/footer'
 import meta from '../lib/meta'
 import { getTokensPrice } from '../lib/api/tokens'
 import { getENS } from '../lib/api/ens'
-import { getProvider } from '../lib/chain/evm'
-import { NETWORK, ENVIRONMENT, IS_STAGING, getChainsData, getAssetsData } from '../lib/config'
-import { getChainData, getAssetData, getContractData, getPoolData } from '../lib/object'
+import { getProvider, getBalance } from '../lib/chain/evm'
+import { NETWORK, ENVIRONMENT, getChainsData, getAssetsData } from '../lib/config'
+import { getChainData, getAssetData, getChainContractsData, getContractData, getPoolData, getBalanceData } from '../lib/object'
 import { formatUnits, isNumber } from '../lib/number'
 import { split, toArray, equalsIgnoreCase, sleep } from '../lib/utils'
-import { THEME, PAGE_VISIBLE, CHAINS_DATA, ASSETS_DATA, POOL_ASSETS_DATA, GAS_TOKENS_PRICE_DATA, ENS_DATA, ROUTER_ASSET_BALANCES_DATA, POOLS_DATA, RPCS, SDK, LATEST_BUMPED_TRANSFERS_DATA } from '../reducers/types'
+import { THEME, PAGE_VISIBLE, CHAINS_DATA, ASSETS_DATA, POOL_ASSETS_DATA, GAS_TOKENS_PRICE_DATA, ENS_DATA, ROUTER_ASSET_BALANCES_DATA, POOLS_DATA, RPCS, SDK, BALANCES_DATA, LATEST_BUMPED_TRANSFERS_DATA } from '../reducers/types'
 
 export default ({ children }) => {
   const dispatch = useDispatch()
-  const {
-    preferences,
-    chains,
-    assets,
-    pool_assets,
-    gas_tokens_price,
-    ens,
-    router_asset_balances,
-    pools,
-    rpc_providers,
-    dev,
-    wallet,
-  } = useSelector(
-    state => (
-      {
-        preferences: state.preferences,
-        chains: state.chains,
-        assets: state.assets,
-        pool_assets: state.pool_assets,
-        gas_tokens_price: state.gas_tokens_price,
-        ens: state.ens,
-        router_asset_balances: state.router_asset_balances,
-        pools: state.pools,
-        rpc_providers: state.rpc_providers,
-        dev: state.dev,
-        wallet: state.wallet,
-      }
-    ),
-    shallowEqual,
-  )
+  const { preferences, chains, assets, pool_assets, gas_tokens_price, ens, router_asset_balances, pools, rpc_providers, dev, wallet, balances } = useSelector(state => ({ preferences: state.preferences, chains: state.chains, assets: state.assets, pool_assets: state.pool_assets, gas_tokens_price: state.gas_tokens_price, ens: state.ens, router_asset_balances: state.router_asset_balances, pools: state.pools, rpc_providers: state.rpc_providers, dev: state.dev, wallet: state.wallet, balances: state.balances }), shallowEqual)
   const { theme, page_visible } = { ...preferences }
   const { chains_data } = { ...chains }
   const { assets_data } = { ...assets }
@@ -62,6 +35,7 @@ export default ({ children }) => {
   const { sdk } = { ...dev }
   const { wallet_data } = { ...wallet }
   const { provider, ethereum_provider, signer, address } = { ...wallet_data }
+  const { balances_data, get_balances_data } = { ...balances }
 
   const router = useRouter()
   const { pathname, query, asPath } = { ...router }
@@ -206,10 +180,10 @@ export default ({ children }) => {
                   const { contracts } = { ...a }
                   let { name, symbol } = { ...a }
                   const contract_data = getContractData(chain_id, contracts)
-                  const { contract_address } = { ...contract_data }
+                  const { contract_address, xERC20 } = { ...contract_data }
                   symbol = contract_data?.symbol || symbol
                   name = name || symbol
-                  return { name, symbol, address: contract_address }
+                  return { name, symbol, address: xERC20 || contract_address }
                 }),
               }
             }
@@ -343,35 +317,12 @@ export default ({ children }) => {
               pool.local = local
             }
 
-            /*if (lpTokenAddress) {
-              await sleep(1.5 * 1000)
-              console.log('[General]', '[getTokenSupply]', { domain_id, lpTokenAddress })
-              try {
-                supply = await sdk.sdkPool.getTokenSupply(domain_id, lpTokenAddress)
-                supply = formatUnits(supply)
-                console.log('[General]', '[LPTokenSupply]', { domain_id, lpTokenAddress, supply })
-              } catch (error) {
-                console.log('[General]', '[getTokenSupply error]', { domain_id, lpTokenAddress }, error)
-              }
-            }*/
             supply = supply || pool?.supply
             let { price } = { ...getAssetData(asset_data.id, assets_data) }
             price = price || 0
             if (isNumber(supply) || (adopted?.balance && local?.balance)) {
-              tvl = Number(supply || _.sum(toArray(_.concat(adopted, local)).map(a => Number(a.balance)))) * price
+              tvl = Number(_.sum(toArray(_.concat(adopted, local)).map(a => Number(a.balance))) || supply) * price
             }
-
-            /*if (pool && (IS_STAGING || ENVIRONMENT === 'production')) {
-              await sleep(1.5 * 1000)
-              const number_of_days = 7
-              console.log('[General]', '[getYieldData]', { domain_id, contract_address, number_of_days })
-              try {
-                stats = _.cloneDeep(await sdk.sdkPool.getYieldData(domain_id, contract_address, number_of_days))
-                console.log('[General]', '[yieldData]', { domain_id, contract_address, number_of_days, stats })
-              } catch (error) {
-                console.log('[General]', '[getYieldData error]', { domain_id, contract_address, number_of_days }, error)
-              }
-            }*/
 
             if (equalsIgnoreCase(pool?.domainId, domain_id)) {
               const { liquidity, volumeFormatted, fees } = { ...stats }
@@ -406,7 +357,15 @@ export default ({ children }) => {
         }
       }
 
-      const getChainData = async chain_data => pool_assets_data.forEach(a => getPool(chain_data, a))
+      const getChainData = async chain_data => {
+        const { no_pool } = { ...chain_data }
+        if (no_pool) {
+          dispatch({ type: POOLS_DATA, value: [] })
+        }
+        else {
+          pool_assets_data.forEach(a => getPool(chain_data, a))
+        }
+      }
 
       const getData = async () => {
         if (page_visible && chains_data && pool_assets_data && sdk && pathname && ['/', '/[chain]'].includes(pathname)) {
@@ -419,6 +378,65 @@ export default ({ children }) => {
       return () => clearInterval(interval)
     },
     [page_visible, chains_data, pool_assets_data, sdk, pathname, chain],
+  )
+
+  // balances
+  useEffect(
+    () => {
+      const getMyBalance = async (chain_id, contract_data) => {
+        const { contract_address, xERC20, next_asset, wrappable } = { ...contract_data }
+        const provider = rpcs[chain_id]
+        if (provider) {
+          const contracts_data = toArray(
+            _.concat(
+              { ...contract_data },
+              xERC20 && { ...contract_data, contract_address: xERC20 },
+              wrappable && { ...contract_data, contract_address: ZeroAddress },
+              next_asset && { ...contract_data, ...next_asset },
+            )
+          ).filter(c => c.contract_address)
+
+          const balances = []
+          for (const contract_data of contracts_data) {
+            const { contract_address, decimals } = { ...contract_data }
+            try {
+              const balance = await getBalance(address, contract_data, chain_id, chains_data)
+              if (isNumber(balance) || !isNumber(getBalanceData(chain_id, contract_address, balances_data))) {
+                balances.push({ ...contract_data, amount: formatUnits(balance, decimals) })
+              }
+            } catch (error) {}
+          }
+
+          if (balances.length > 0) {
+            dispatch({ type: BALANCES_DATA, value: { [chain_id]: balances } })
+          }
+        }
+      }
+
+      const getData = async is_interval => {
+        if (page_visible && chains_data && assets_data && rpcs && address) {
+          if (get_balances_data) {
+            const all_chains_data = getChainData(undefined, chains_data, { return_all: true })
+            const data = get_balances_data && !is_interval && all_chains_data.findIndex(c => !balances_data?.[c.chain_id]) < 0 ? toArray(get_balances_data) : all_chains_data.map(c => { return { chain: c.id } })
+            data.forEach(c => {
+              const { chain, contract_data } = { ...c }
+              const { chain_id } = { ...getChainData(chain, chains_data) }
+              if (contract_data) {
+                getMyBalance(chain_id, contract_data)
+              }
+              else {
+                toArray(getChainContractsData(chain_id, assets_data)).forEach(c => getMyBalance(chain_id, c))
+              }
+            })
+          }
+        }
+      }
+
+      getData()
+      const interval = setInterval(() => getData(true), 1 * 60 * 1000)
+      return () => clearInterval(interval)
+    },
+    [page_visible, chains_data, assets_data, rpcs, address, get_balances_data],
   )
 
   const { title, description, image, url } = { ...meta(asPath) }

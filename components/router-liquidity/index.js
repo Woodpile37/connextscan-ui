@@ -16,6 +16,8 @@ import ExplorerLink from '../explorer/link'
 import SelectChain from '../select/chain'
 import SelectAsset from '../select/asset'
 import Wallet from '../wallet'
+import XERC20Wrapper from '../wrapper/xERC20'
+import AlchemixWrapper from '../wrapper/alchemix'
 import { getBalance } from '../../lib/chain/evm'
 import { GAS_LIMIT_ADJUSTMENT } from '../../lib/config'
 import { getChainData, getAssetData, getContractData } from '../../lib/object'
@@ -41,6 +43,7 @@ export default () => {
   const { address } = { ...query }
 
   const [hidden, setHidden] = useState(true)
+  const [routerOwner, setRouterOwner] = useState(null)
   const [data, setData] = useState(null)
   const [balance, setBalance] = useState(null)
   const [action, setAction] = useState(_.head(ACTIONS))
@@ -56,6 +59,31 @@ export default () => {
   const [removing, setRemoving] = useState(null)
   const [removeProcessing, setRemoveProcessing] = useState(null)
   const [removeResponse, setRemoveResponse] = useState(null)
+
+  useEffect(
+    () => {
+      const getData = async () => {
+        const { chain } = { ...data }
+        if (chains_data && sdk && address && chain) {
+          const { domain_id } = { ...getChainData(chain, chains_data) }
+          if (domain_id) {
+            try {
+              const contract = await sdk.sdkBase.getConnext(domain_id)
+              if (contract) {
+                const router_owner = await contract.getRouterOwner(address)
+                console.log('[getRouterOwner]', { domain_id, address, router_owner })
+                setRouterOwner(router_owner)
+              }
+            } catch (error) {
+              setRouterOwner(null)
+            }
+          }
+        }
+      }
+      getData()
+    },
+    [chains_data, sdk, address, data],
+  )
 
   useEffect(
     () => {
@@ -79,9 +107,10 @@ export default () => {
           const { contracts } = { ...getAssetData(asset, assets_data) }
           const contract_data = getContractData(chain_id, contracts)
           const { next_asset } = { ...contract_data }
-          let { contract_address, decimals } = { ...contract_data }
-          contract_address = next_asset?.contract_address || contract_address
-          decimals = next_asset?.decimals || decimals || 18
+          let { contract_address, xERC20, decimals } = { ...contract_data }
+          const isNextAsset = equalsIgnoreCase(next_asset?.symbol, data.symbol)
+          contract_address = (isNextAsset ? next_asset?.contract_address : null) || xERC20 || contract_address
+          decimals = (isNextAsset ? next_asset?.decimals : null) || decimals || 18
 
           switch (action) {
             case 'remove':
@@ -133,16 +162,17 @@ export default () => {
       const asset_data = getAssetData(asset, assets_data)
       const { contracts } = { ...asset_data }
       const contract_data = getContractData(chain_id, contracts)
-      const { next_asset } = { ...contract_data }
+      const { xERC20, next_asset } = { ...contract_data }
       let { contract_address, decimals, symbol } = { ...contract_data }
-      contract_address = next_asset?.contract_address || contract_address
-      decimals = next_asset?.decimals || decimals || 18
-      symbol = next_asset?.symbol || symbol || asset_data?.symbol
+      const isNextAsset = equalsIgnoreCase(next_asset?.symbol, data.symbol)
+      contract_address = (isNextAsset ? next_asset?.contract_address : null) || contract_address
+      decimals = (isNextAsset ? next_asset?.decimals : null) || decimals || 18
+      symbol = (isNextAsset ? next_asset?.symbol : null) || symbol || asset_data?.symbol
 
       const params = {
         domainId: domain_id,
         amount: parseUnits(amount, decimals),
-        tokenAddress: contract_address,
+        tokenAddress: xERC20 || contract_address,
         router: address,
       }
 
@@ -170,7 +200,15 @@ export default () => {
         setApproving(false)
       } catch (error) {
         const response = parseError(error)
-        setApproveResponse({ status: 'failed', ...response, chain_data })
+        const { code } = { ...response }
+        switch (code) {
+          case 'user_rejected':
+            reset()
+            break
+          default:
+            setApproveResponse({ status: 'failed', ...response, chain_data })
+            break
+        }
         setApproveProcessing(false)
         setApproving(false)
         failed = true
@@ -178,6 +216,7 @@ export default () => {
 
       if (!failed) {
         try {
+          console.log('[addLiquidityForRouter]', { params })
           const request = await sdk.sdkRouter.addLiquidityForRouter(params)
           if (request) {
             try {
@@ -197,6 +236,7 @@ export default () => {
 
             setAddProcessing(true)
             const receipt = await signer.provider.waitForTransaction(hash)
+            console.log('[addLiquidityForRouter]', { params, receipt })
             const { status } = { ...receipt }
             failed = !status
             setAddResponse({
@@ -211,6 +251,7 @@ export default () => {
           }
         } catch (error) {
           const response = parseError(error)
+          console.log('[addLiquidityForRouter error]', { params }, error)
           setAddResponse({ status: 'failed', ...response, chain_data })
           failed = true
         }
@@ -235,16 +276,17 @@ export default () => {
       const asset_data = getAssetData(asset, assets_data)
       const { contracts } = { ...asset_data }
       const contract_data = getContractData(chain_id, contracts)
-      const { next_asset } = { ...contract_data }
+      const { xERC20, next_asset } = { ...contract_data }
       let { contract_address, decimals, symbol } = { ...contract_data }
-      contract_address = next_asset?.contract_address || contract_address
-      decimals = next_asset?.decimals || decimals || 18
-      symbol = next_asset?.symbol || symbol || asset_data?.symbol
+      const isNextAsset = equalsIgnoreCase(next_asset?.symbol, data.symbol)
+      contract_address = (isNextAsset ? next_asset?.contract_address : null) || contract_address
+      decimals = (isNextAsset ? next_asset?.decimals : null) || decimals || 18
+      symbol = (isNextAsset ? next_asset?.symbol: null) || symbol || asset_data?.symbol
 
       const params = {
         domainId: domain_id,
         amount: parseUnits(amount, decimals),
-        tokenAddress: contract_address,
+        tokenAddress: xERC20 || contract_address,
         router: address,
         recipient: wallet_address,
       }
@@ -252,6 +294,7 @@ export default () => {
       let failed = false
       if (!failed) {
         try {
+          console.log('[removeRouterLiquidityFor]', { params })
           const request = await sdk.sdkRouter.removeRouterLiquidityFor(params)
           if (request) {
             const response = await signer.sendTransaction(request)
@@ -265,6 +308,7 @@ export default () => {
 
             setRemoveProcessing(true)
             const receipt = await signer.provider.waitForTransaction(hash)
+            console.log('[removeRouterLiquidityFor]', { params, receipt })
             const { status } = { ...receipt }
             failed = !status
             setRemoveResponse({
@@ -279,6 +323,7 @@ export default () => {
           }
         } catch (error) {
           const response = parseError(error)
+          console.log('[removeRouterLiquidityFor error]', { params }, error)
           setRemoveResponse({ status: 'failed', ...response, chain_data })
           failed = true
         }
@@ -295,13 +340,15 @@ export default () => {
   const { chain_id } = { ...chain_data }
 
   const asset_data = getAssetData(asset, assets_data)
-  const { contracts } = { ...asset_data }
+  const { is_alchemix, contracts } = { ...asset_data }
   const contract_data = getContractData(chain_id, contracts)
   const { next_asset } = { ...contract_data }
-  let { contract_address, decimals, symbol } = { ...contract_data }
-  contract_address = next_asset?.contract_address || contract_address
-  decimals = next_asset?.decimals || decimals || 18
-  symbol = next_asset?.symbol || symbol || asset_data?.symbol
+  let { contract_address, decimals, symbol, image } = { ...contract_data }
+  const isNextAsset = equalsIgnoreCase(next_asset?.symbol, data?.symbol)
+  contract_address = (isNextAsset ? next_asset?.contract_address : null) || contract_address
+  decimals = (isNextAsset ? next_asset?.decimals : null) || decimals || 18
+  symbol = (isNextAsset ? next_asset?.symbol : null) || symbol || asset_data?.symbol
+  image = (isNextAsset ? next_asset?.image : null) || image || asset_data?.image
   const max_amount = balance || 0
 
   const fields = [
@@ -440,15 +487,29 @@ export default () => {
             <div className="space-y-4">
               <div className="flex items-center justify-between space-x-4">
                 <div className="w-fit border-b dark:border-slate-800 flex items-center justify-between space-x-4">
-                  {ACTIONS.map((a, i) => (
-                    <div
-                      key={i}
-                      onClick={() => setAction(a)}
-                      className={`w-fit border-b-2 ${action === a ? 'border-slate-300 dark:border-slate-200' : 'border-transparent text-slate-400 dark:text-slate-500'} cursor-pointer capitalize text-sm font-semibold text-left py-3 px-0`}
-                    >
-                      {a}
-                    </div>
-                  ))}
+                  {ACTIONS.map((a, i) => {
+                    const disabled = a === 'remove' && routerOwner && toArray([routerOwner, address]).findIndex(a => equalsIgnoreCase(wallet_address, a)) < 0
+                    const selectComponent = (
+                      <div
+                        key={i}
+                        onClick={
+                          () => {
+                            if (!disabled) {
+                              setAction(a)
+                            }
+                          }
+                        }
+                        className={`w-fit border-b-2 ${action === a ? 'border-slate-300 dark:border-slate-200' : 'border-transparent text-slate-400 dark:text-slate-500'} ${disabled ? 'cursor-not-allowed text-slate-400 dark:text-slate-500' : 'cursor-pointer'} capitalize text-sm font-semibold text-left py-3 px-0`}
+                      >
+                        {a}
+                      </div>
+                    )
+                    return a === 'remove' && disabled ?
+                      <Tooltip key={i} content="Only router can remove liquidity.">
+                        {selectComponent}
+                      </Tooltip> :
+                      selectComponent
+                  })}
                 </div>
                 <div className="flex items-center space-x-2">
                   <span className="text-sm">
@@ -469,10 +530,13 @@ export default () => {
                     <SelectAsset
                       disabled={disabled}
                       value={asset}
-                      onSelect={(a, c) => { setData({ ...data, asset: a, amount: null }) }}
+                      onSelect={(a, c) => { setData({ ...data, asset: a, symbol: c, amount: null }) }}
                       chain={chain}
+                      isRouterLiquidity={true}
+                      showNextAssets={true}
                       canClose={false}
-                      className="flex items-center space-x-1.5 sm:space-x-2 sm:-ml-1"
+                      data={{ symbol, image }}
+                      className="flex items-center space-x-1.5 sm:space-x-2"
                     />
                     <DebounceInput
                       debounceTimeout={750}
@@ -607,6 +671,8 @@ export default () => {
                   )
                 })}
               </div>
+              {contract_data?.xERC20 && <XERC20Wrapper tokenId={asset} contractData={contract_data} />}
+              {is_alchemix && contract_data?.next_asset && <AlchemixWrapper tokenId={asset} contractData={contract_data} />}
             </div>
           </div>
         }
