@@ -1,23 +1,18 @@
-import { THEME, PAGE_VISIBLE } from './types'
+import { THEME } from './types'
 
-export default (
+export default function preferences(
   state = {
-    [THEME]: 'dark',
-    [PAGE_VISIBLE]: true,
+    [`${THEME}`]: 'dark',
   },
-  action,
-) => {
+  action
+) {
   switch (action.type) {
     case THEME:
       localStorage.setItem(THEME, action.value)
+
       return {
         ...state,
-        [THEME]: action.value,
-      }
-    case PAGE_VISIBLE:
-      return {
-        ...state,
-        [PAGE_VISIBLE]: action.value,
+        [`${THEME}`]: action.value,
       }
     default:
       return state

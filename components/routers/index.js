@@ -2,575 +2,333 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { useState, useEffect } from 'react'
 import { useSelector, shallowEqual } from 'react-redux'
+
 import _ from 'lodash'
 import moment from 'moment'
+import Web3 from 'web3'
+import { constants, utils } from 'ethers'
+import { Triangle } from 'react-loader-spinner'
+import StackGrid from 'react-stack-grid'
+import { MdOutlineRouter } from 'react-icons/md'
+import { TiArrowRight } from 'react-icons/ti'
 
-import TVLChart from './tvl/chart'
-import Metrics from '../metrics'
-import Spinner from '../spinner'
-import Datatable from '../datatable'
-import NumberDisplay from '../number'
+import Popover from '../popover'
 import Copy from '../copy'
+import Widget from '../widget'
 import Image from '../image'
-import EnsProfile from '../profile/ens'
-import { ProgressBar } from '../progress-bars'
+import { currency_symbol } from '../../lib/object/currency'
+import { numberFormat, ellipseAddress } from '../../lib/utils'
 
-import { getDailyTransferMetrics, getDailyTransferVolume } from '../../lib/api/metrics'
-import { NUM_STATS_DAYS } from '../../lib/config'
-import { getChainData, getAssetData, getContractData } from '../../lib/object'
-import { formatUnits, isNumber } from '../../lib/number'
-import { toArray, equalsIgnoreCase } from '../../lib/utils'
-
-export default () => {
-  const { chains, assets, router_asset_balances, dev } = useSelector(state => ({ chains: state.chains, assets: state.assets, router_asset_balances: state.router_asset_balances, dev: state.dev }), shallowEqual)
+export default function Routers() {
+  const { preferences, chains, ens, routers_assets } = useSelector(state => ({ preferences: state.preferences, chains: state.chains, ens: state.ens, routers_assets: state.routers_assets }), shallowEqual)
+  const { theme } = { ...preferences }
   const { chains_data } = { ...chains }
-  const { assets_data } = { ...assets }
-  const { router_asset_balances_data } = { ...router_asset_balances }
-  const { sdk } = { ...dev }
+  const { ens_data } = { ...ens }
+  const { routers_assets_data } = { ...routers_assets }
 
   const router = useRouter()
   const { query } = { ...router }
-  const { mode } = { ...query }
+  const { all } = { ...query }
 
-  const [data, setData] = useState(null)
+  const [routers, setRouters] = useState(null)
+  const [web3, setWeb3] = useState(null)
+  const [chainId, setChainId] = useState(null)
+  const [addTokenData, setAddTokenData] = useState(null)
+  const [timer, setTimer] = useState(null)
 
-  useEffect(
-    () => {
-      const getData = async () => {
-        if (chains_data && assets_data && sdk) {
-          const transfer_date = `gt.${moment().subtract(NUM_STATS_DAYS, 'days').startOf('day').format('YYYY-MM-DD')}`
-
-          const volumes = toArray(await getDailyTransferVolume({ transfer_date })).filter(d => d.transfer_date).map(d => {
-            const { origin_chain, destination_chain, asset, volume, usd_volume } = { ...d }
-            const origin_chain_data = getChainData(origin_chain, chains_data)
-            const destination_chain_data = getChainData(destination_chain, chains_data)
-            const { chain_id } = { ...origin_chain_data }
-
-            let asset_data = getAssetData(undefined, assets_data, { chain_id, contract_address: asset })
-            asset_data = { ...asset_data, ...getContractData(chain_id, asset_data?.contracts) }
-            if (asset_data.contracts) {
-              delete asset_data.contracts
-            }
-            if (asset_data.next_asset && equalsIgnoreCase(asset_data.next_asset.contract_address, asset)) {
-              asset_data = { ...asset_data, ...asset_data.next_asset }
-              delete asset_data.next_asset
-            }
-            const { decimals, price } = { ...asset_data }
-            const amount = formatUnits(volume || '0', decimals)
-            return {
-              ...d,
-              origin_chain_data,
-              destination_chain_data,
-              asset_data,
-              amount,
-              volume: usd_volume || (amount * (price || 0)),
-            }
-          })
-
-          const transfers = toArray(await getDailyTransferMetrics({ transfer_date })).filter(d => d.transfer_date).map(d => {
-            const { origin_chain, destination_chain } = { ...d }
-            const origin_chain_data = getChainData(origin_chain, chains_data)
-            const destination_chain_data = getChainData(destination_chain, chains_data)
-            return { ...d, origin_chain_data, destination_chain_data }
-          })
-
-          setData({
-            raw_volumes: volumes,
-            volumes: _.orderBy(
-              Object.entries(_.groupBy(volumes, 'router')).map(([k, v]) => {
-                return {
-                  router: k,
-                  volume: _.sumBy(v, 'volume'),
-                }
-              }),
-              ['volume'], ['desc'],
-            ),
-            raw_transfers: transfers,
-            transfers: _.orderBy(
-              Object.entries(_.groupBy(transfers, 'router')).map(([k, v]) => {
-                return {
-                  router: k,
-                  transfers: _.sumBy(v, 'transfer_count'),
-                }
-              }),
-              ['transfers'], ['desc'],
-            ),
-          })
+  useEffect(() => {
+    if (!web3) {
+      setWeb3(new Web3(Web3.givenProvider))
+    }
+    else {
+      try {
+        web3.currentProvider._handleChainChanged = e => {
+          try {
+            setChainId(Web3.utils.hexToNumber(e?.chainId))
+          } catch (error) {}
         }
-      }
-      getData()
-    },
-    [chains_data, assets_data, sdk],
-  )
+      } catch (error) {}
+    }
+  }, [web3])
 
-  const { raw_volumes, transfers } = { ...data }
-  const routers = _.orderBy(
-    Object.entries(_.groupBy(Object.values({ ...router_asset_balances_data }).flatMap(d => d), 'address')).map(([k, v]) => {
-      return {
-        router_address: k,
-        assets: _.orderBy(v, ['value'], ['desc']),
-      }
-    })
-    .map(d => {
-      const { router_address, assets } = { ...d }
-      const { volumes, transfers } = { ...data }
-      return {
-        ...d,
-        total_value: _.sumBy(assets, 'value'),
-        total_volume: _.sumBy(toArray(volumes).filter(_d => equalsIgnoreCase(_d.router, router_address)), 'volume'),
-        total_transfers: _.sumBy(toArray(transfers).filter(_d => equalsIgnoreCase(_d.router, router_address)), 'transfers'),
-        supported_chains: _.uniq(assets.map(_d => _d.chain_id)),
-        liquidity_by_assets: _.orderBy(
-          Object.entries(_.groupBy(assets.filter(_d => _d.asset_data?.id), 'asset_data.id')).map(([k, v]) => {
-            return {
-              asset: k,
-              value: _.sumBy(v, 'value'),
-              i: toArray(assets_data).findIndex(a => a.id === k),
-            }
-          }),
-          ['i'], ['asc'],
-        ),
-        liquidity_by_chains: _.orderBy(
-          Object.entries(_.groupBy(assets.filter(_d => _d.chain_data?.id), 'chain_data.id')).map(([k, v]) => {
-            return {
-              chain: k,
-              value: _.sumBy(v, 'value'),
-              i: chains_data.findIndex(c => c.id === k),
-            }
-          }),
-          ['i'], ['asc'],
-        ),
-        liquidity_by_assets_chains: _.orderBy(
-          Object.entries(_.groupBy(assets.filter(_d => _d.asset_data?.id && _d.chain_data?.id), 'asset_data.id')).map(([k, v]) => {
-            return {
-              asset: k,
-              value: _.sumBy(v, 'value'),
-              chains: _.orderBy(
-                Object.entries(_.groupBy(v, 'chain_data.id')).map(([_k, _v]) => {
-                  return {
-                    chain: _k,
-                    value: _.sumBy(_v, 'value'),
-                    i: chains_data.findIndex(c => c.id === _k),
-                  }
-                }),
-                ['i'], ['asc'],
-              ),
-              i: toArray(assets_data).findIndex(a => a.id === k),
-            }
-          }),
-          ['i'], ['asc'],
-        ),
-      }
-    })
-    .map(d => {
-      const { router_address, total_value, total_volume, liquidity_by_assets, liquidity_by_chains, liquidity_by_assets_chains } = { ...d }
-      return {
-        ...d,
-        liquidity_utilization: total_value && total_volume ? total_volume / total_value : 0,
-        liquidity_utilization_by_assets: liquidity_by_assets.map(_d => {
-          const { asset } = { ..._d }
-          let { value } = { ..._d }
-          const volume = _.sumBy(toArray(raw_volumes).filter(v => equalsIgnoreCase(v.router, router_address) && v.asset_data?.id === asset), 'volume')
-          value = value && volume ? volume / value : 0
-          return { asset, value }
-        }),
-        liquidity_utilization_by_chains: liquidity_by_chains.map(_d => {
-          const { chain } = { ..._d }
-          let { value } = { ..._d }
-          const volume = _.sumBy(toArray(raw_volumes).filter(v => equalsIgnoreCase(v.router, router_address) && v.destination_chain_data?.id === chain), 'volume')
-          value = value && volume ? volume / value : 0
-          return { chain, value }
-        }),
-        liquidity_utilization_by_assets_chains: liquidity_by_assets_chains.map(_d => {
-          const { asset, value } = { ..._d }
-          let { chains } = { ..._d }
-          const volume = _.sumBy(toArray(raw_volumes).filter(v => equalsIgnoreCase(v.router, router_address) && v.asset_data?.id === asset), 'volume')
-          const utilization = value && volume ? volume / value : 0
-          chains = chains.map(c => {
-            const { chain, value } = { ...c }
-            const volume = _.sumBy(toArray(raw_volumes).filter(v => equalsIgnoreCase(v.router, router_address) && v.asset_data?.id === asset && v.destination_chain_data?.id === chain), 'volume')
-            const utilization = value && volume ? volume / value : 0
-            return { chain, value, utilization }
+  useEffect(() => {
+    if (addTokenData?.chain_id === chainId && addTokenData?.contract) {
+      addTokenToMetaMask(addTokenData.chain_id, addTokenData.contract)
+    }
+  }, [chainId, addTokenData])
+
+  useEffect(() => {
+    if (routers_assets_data) {
+      const data = routers_assets_data.map(ra => {
+        const assetBalances = ra?.asset_balances || []
+
+        return {
+          ...ra,
+          amount_value: _.sumBy(assetBalances, 'amount_value'),
+          locked_value: _.sumBy(assetBalances, 'locked_value'),
+          lockedIn_value: _.sumBy(assetBalances, 'lockedIn_value'),
+          supplied_value: _.sumBy(assetBalances, 'supplied_value'),
+          removed_value: _.sumBy(assetBalances, 'removed_value'),
+          volume_value: _.sumBy(assetBalances, 'volume_value'),
+          volumeIn_value: _.sumBy(assetBalances, 'volumeIn_value'),
+          receivingFulfillTxCount: _.sumBy(assetBalances, 'receivingFulfillTxCount'),
+        }
+      }).filter(ra => ['true'].includes(all) || ra?.amount_value > 1)
+
+      setRouters(_.orderBy(data, ['amount_value'], ['desc']))
+    }
+  }, [routers_assets_data])
+
+  useEffect(() => {
+    const run = async () => setTimer(moment().unix())
+    if (!timer) {
+      run()
+    }
+    const interval = setInterval(() => run(), 0.5 * 1000)
+    return () => clearInterval(interval)
+  }, [timer])
+
+  const addTokenToMetaMask = async (chain_id, contract) => {
+    if (web3 && contract) {
+      if (chain_id === chainId) {
+        try {
+          const response = await web3.currentProvider.request({
+            method: 'wallet_watchAsset',
+            params: {
+              type: 'ERC20',
+              options: {
+                address: contract.contract_address,
+                symbol: contract.symbol,
+                decimals: contract.contract_decimals,
+                image: `${contract.image?.startsWith('/') ? process.env.NEXT_PUBLIC_SITE_URL : ''}${contract.image}`,
+              },
+            },
           })
-          return { asset, value, utilization, chains }
-        })
-      }
-    }),
-    ['total_value'], ['desc'],
-  )
+        } catch (error) {}
 
-  const metrics = router_asset_balances_data && {
-    liquidity: _.sumBy(routers, 'total_value'),
-    volume: _.sumBy(routers, 'total_volume'),
-    transfers: _.sumBy(transfers, 'transfers'),
-    supported_chains: _.uniq(routers.flatMap(d => d.supported_chains)),
-    liquidity_by_assets: Object.entries(_.groupBy(routers.flatMap(d => toArray(d.liquidity_by_assets)), 'asset')).map(([k, v]) => { return { asset: k, value: _.sumBy(v, 'value') } }),
-    liquidity_by_chains: Object.entries(_.groupBy(routers.flatMap(d => toArray(d.liquidity_by_chains)), 'chain')).map(([k, v]) => { return { chain: k, value: _.sumBy(v, 'value') } }),
-    liquidity_by_assets_chains: Object.entries(_.groupBy(routers.flatMap(d => toArray(d.liquidity_by_assets_chains)), 'asset')).map(([k, v]) => {
-      return {
-        asset: k,
-        value: _.sumBy(v, 'value'),
-        chains: Object.entries(_.groupBy(v.flatMap(_v => _v.chains), 'chain')).map(([_k, _v]) => {
-          return {
-            chain: _k,
-            value: _.sumBy(_v, 'value'),
-          }
-        }),
+        setAddTokenData(null)
       }
-    }),
-    liquidity_by_routers: Object.entries(_.groupBy(routers, 'router_address')).map(([k, v]) => { return { address: k, value: _.sumBy(v, 'total_value') } }),
-    liquidity_utilization_by_assets_chains: Object.entries(_.groupBy(routers.flatMap(r => toArray(r.liquidity_utilization_by_assets_chains)), 'asset')).map(([k, v]) => {
-      const volume = _.sumBy(toArray(raw_volumes).filter(d => d.asset_data?.id === k), 'volume')
-      let value = _.sumBy(v, 'value')
-      value = value && volume ? volume / value : 0
-      return {
-        asset: k,
-        value,
-        chains: Object.entries(_.groupBy(v.flatMap(_v => _v.chains), 'chain')).map(([_k, _v]) => {
-          const volume = _.sumBy(toArray(raw_volumes).filter(d => d.asset_data?.id === k && d.destination_chain_data?.id === _k), 'volume')
-          let value = _.sumBy(_v, 'value')
-          value = value && volume ? volume / value : 0
-          return { chain: _k, value }
-        }),
+      else {
+        switchNetwork(chain_id, contract)
       }
-    }),
+    }
   }
+
+  const switchNetwork = async (chain_id, contract) => {
+    try {
+      await web3.currentProvider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: utils.hexValue(chain_id) }],
+      })
+    } catch (error) {
+      if (error.code === 4902) {
+        try {
+          await web3.currentProvider.request({
+            method: 'wallet_addEthereumChain',
+            params: chains_data?.find(c => c.chain_id === chain_id)?.provider_params,
+          })
+        } catch (error) {}
+      }
+    }
+
+    if (contract) {
+      setAddTokenData({ chain_id, contract })
+    }
+  }
+
+  const routersComponent = routers?.map((r, i) => (
+    <Widget
+      key={i}
+      title={<div className={`flex items-${ens_data?.[r?.router_id.toLowerCase()]?.name ? 'start' : 'center'} space-x-1.5`}>
+        <MdOutlineRouter size={20} className="text-gray-400 dark:text-gray-600 mb-0.5" />
+        {r?.router_id && (
+          <div className="space-y-0.5">
+            {ens_data?.[r.router_id.toLowerCase()]?.name && (
+              <div className="flex items-center">
+                <Image
+                  src={`${process.env.NEXT_PUBLIC_ENS_AVATAR_URL}/${ens_data[r.router_id.toLowerCase()].name}`}
+                  alt=""
+                  className="w-6 h-6 rounded-full mr-2"
+                />
+                <Link href={`/router/${r.router_id}`}>
+                  <a className="text-blue-600 dark:text-white sm:text-base font-semibold">
+                    {ellipseAddress(ens_data[r.router_id.toLowerCase()].name, 16)}
+                  </a>
+                </Link>
+              </div>
+            )}
+            <div className="flex items-center space-x-1">
+              {ens_data?.[r.router_id.toLowerCase()]?.name ?
+                <Copy
+                  text={r.router_id}
+                  copyTitle={<span className="text-gray-400 dark:text-gray-600 text-xs font-normal">
+                    {ellipseAddress(r.router_id, 8)}
+                  </span>}
+                />
+                :
+                <>
+                  <Link href={`/router/${r.router_id}`}>
+                    <a className="text-blue-600 dark:text-white text-xs font-normal">
+                      {ellipseAddress(r.router_id, 8)}
+                    </a>
+                  </Link>
+                  <Copy text={r.router_id} />
+                </>
+              }
+            </div>
+          </div>
+        )}
+      </div>}
+      right={r?.amount_value > 0 && (
+        <div className="block sm:flex items-center ml-2">
+          <div className="flex flex-col justify-end space-y-1 mr-0 sm:mr-6">
+            <div className="uppercase text-gray-400 dark:text-gray-600 text-2xs font-medium text-right">Available</div>
+            <div className="font-mono uppercase sm:text-sm font-semibold text-right">
+              {currency_symbol}{numberFormat(r.amount_value, '0,0.00a')}
+            </div>
+          </div>
+          <div className="hidden sm:flex flex-col justify-end space-y-1 mt-2 sm:mt-0 ">
+            <div className="uppercase text-gray-400 dark:text-gray-600 text-2xs font-medium text-right">Total</div>
+            <div className="font-mono uppercase sm:text-sm font-semibold text-right">
+              {currency_symbol}{numberFormat(r.amount_value + (r.locked_value || 0) + (r.lockedIn_value || 0), '0,0.00a')}
+            </div>
+          </div>
+        </div>
+      )}
+      className="border-0 shadow-md rounded-2xl"
+    >
+      <div className="grid grid-flow-row grid-cols-2 sm:grid-cols-3 gap-0 mt-4 mb-2">
+        {_.orderBy(r?.asset_balances?.flatMap(abs => abs) || [], ['amount_value', 'amount'], ['desc', 'desc']).map((ab, j) => {
+          const addToMetaMaskButton = ab?.assetId !== constants.AddressZero && (
+            <button
+              onClick={() => addTokenToMetaMask(ab?.chain?.chain_id, { ...ab?.asset })}
+              className="w-auto bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 rounded flex items-center justify-center py-1 px-1.5"
+            >
+              <Image
+                src="/logos/wallets/metamask.png"
+                alt=""
+                className="w-3 h-3"
+              />
+            </button>
+          )
+
+          return (
+            <div key={j}>
+              {ab?.asset ?
+                <div className="min-h-full border pt-2.5 pb-3 px-2" style={{ borderColor: ab?.chain?.color }}>
+                  <div className="space-y-0.5">
+                    <div className="flex items-start">
+                      <Image
+                        src={ab.asset?.image}
+                        alt=""
+                        className="w-4 h-4 rounded-full mr-1"
+                      />
+                      <div className="flex flex-col">
+                        <span className="leading-4 text-2xs font-semibold">{ab.asset.name}</span>
+                        {ab.assetId && (
+                          <span className="min-w-max flex items-center space-x-0.5">
+                            <Copy
+                              size={14}
+                              text={ab.assetId}
+                              copyTitle={<span className="text-gray-400 dark:text-gray-600 text-3xs font-medium">
+                                {ellipseAddress(ab.assetId, 4)}
+                              </span>}
+                            />
+                            {ab?.chain?.explorer?.url && (
+                              <a
+                                href={`${ab.chain.explorer.url}${ab.chain.explorer[`contract${ab.assetId === constants.AddressZero ? '_0' : ''}_path`]?.replace('{address}', ab.assetId)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 dark:text-white"
+                              >
+                                {ab.chain.explorer.icon ?
+                                  <Image
+                                    src={ab.chain.explorer.icon}
+                                    alt=""
+                                    className="w-3.5 h-3.5 rounded-full opacity-60 hover:opacity-100"
+                                  />
+                                  :
+                                  <TiArrowRight size={16} className="transform -rotate-45" />
+                                }
+                              </a>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      {ab?.chain?.image && (
+                        <Link href={`/${ab.chain.id}`}>
+                          <a className="hidden sm:block min-w-max w-3 h-3 relative -top-1 -right-1 ml-auto">
+                            <Image
+                              src={ab.chain.image}
+                              alt=""
+                              className="w-3 h-3 rounded-full"
+                            />
+                          </a>
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-center mt-1.5">
+                    <div className="w-full text-center space-y-1">
+                      <div className="font-mono text-xs">
+                        {typeof ab?.amount === 'number' ?
+                          <>
+                            <span className={`uppercase ${ab?.amount_value > 100000 ? 'font-semibold' : 'text-gray-700 dark:text-gray-300 font-medium'} mr-1.5`}>
+                              {numberFormat(ab.amount, ab.amount > 10000 ? '0,0.00a' : ab.amount > 10 ? '0,0' : '0,0.000')}
+                            </span>
+                            <span className="text-gray-400 dark:text-gray-600 text-3xs font-medium">{ab?.asset?.symbol}</span>
+                          </>
+                          :
+                          <span className="text-gray-400 dark:text-gray-600">n/a</span>
+                        }
+                      </div>
+                      <div className="max-w-min bg-gray-100 dark:bg-gray-800 rounded-lg font-mono text-3xs mx-auto py-1 px-2">
+                        {typeof ab?.amount_value === 'number' ?
+                          <span className={`uppercase ${ab?.amount_value > 100000 ? 'text-gray-800 dark:text-gray-200 font-semibold' : 'text-gray-600 dark:text-gray-400'}`}>
+                            {currency_symbol}{numberFormat(ab.amount_value, ab.amount_value > 100000 ? '0,0.00a' : ab.amount_value > 1000 ? '0,0' : '0,0.000')}
+                          </span>
+                          :
+                          <span className="text-gray-400 dark:text-gray-600">n/a</span>
+                        }
+                      </div>
+                    </div>
+                    <div className="min-w-max relative -bottom-2.5 -right-2 mb-0.5 ml-auto">
+                      <Popover
+                        placement="left"
+                        title={<span className="normal-case text-3xs">Add token</span>}
+                        content={<div className="w-32 text-3xs">Add <span className="font-semibold">{ab.asset.symbol}</span> to MetaMask</div>}
+                        titleClassName="py-0.5"
+                        contentClassName="py-1.5"
+                      >
+                        {addToMetaMaskButton}
+                      </Popover>
+                    </div>
+                  </div>
+                </div>
+                :
+                <div className="w-full h-24 shadow flex items-center justify-center">
+                  <Triangle color={theme === 'dark' ? 'white' : '#3B82F6'} width="16" height="16" />
+                </div>
+              }
+            </div>
+          )
+        })}
+      </div>
+    </Widget>
+  ))
 
   return (
     <>
-      <div className="mb-6">
-        <Metrics data={metrics} />
-      </div>
-      {metrics && mode && (
-        <div className="grid gap-4 my-4 sm:my-6">
-          <TVLChart
-            field="utilization"
-            title="Utilization"
-            description="Utilization by chain + by asset"
-            liquidity={metrics.liquidity_by_assets_chains}
-            utilization={metrics.liquidity_utilization_by_assets_chains}
-          />
-          <TVLChart
-            title="TVL"
-            description="Total Value Locked by chain + by asset"
-            liquidity={metrics.liquidity_by_assets_chains}
-            utilization={metrics.liquidity_utilization_by_assets_chains}
-            prefix="$"
-          />
-        </div>
-      )}
-      <div className="my-4 sm:my-6">
-        {router_asset_balances_data ?
-          <Datatable
-            columns={[
-              {
-                Header: '#',
-                accessor: 'i',
-                sortType: (a, b) => a.original.i > b.original.i ? 1 : -1,
-                Cell: props => (
-                  <span className="text-black dark:text-white font-medium">
-                    {(props.flatRows?.indexOf(props.row) > -1 ? props.flatRows.indexOf(props.row) : props.value) + 1}
-                  </span>
-                ),
-              },
-              {
-                Header: 'Address',
-                accessor: 'router_address',
-                disableSortBy: true,
-                Cell: props => {
-                  const { value } = { ...props }
-                  return value && (
-                    <div className="flex items-center space-x-1">
-                      <Link href={`/router/${value}`}>
-                        <EnsProfile
-                          address={value}
-                          noCopy={true}
-                          noImage={true}
-                        />
-                      </Link>
-                      <Copy value={value} />
-                    </div>
-                  )
-                },
-              },
-              {
-                Header: 'Liquidity',
-                accessor: 'total_value',
-                sortType: (a, b) => a.original.total_value > b.original.total_value ? 1 : -1,
-                Cell: props => {
-                  const { value } = { ...props }
-                  return (
-                    <div className="text-right">
-                      {isNumber(value) ?
-                        <NumberDisplay
-                          value={value}
-                          prefix="$"
-                          noTooltip={true}
-                          className="text-base font-bold"
-                        /> :
-                        <span className="text-slate-400 dark:text-slate-500">
-                          -
-                        </span>
-                      }
-                    </div>
-                  )
-                },
-                headerClassName: 'justify-end whitespace-nowrap text-right',
-              },
-              {
-                Header: 'Relative Share %',
-                accessor: 'share',
-                sortType: (a, b) => a.original.total_value > b.original.total_value ? 1 : -1,
-                Cell: props => {
-                  const { flatRows, row } = { ...props }
-                  const index = flatRows?.indexOf(row)
-                  const total = _.sumBy(routers, 'total_value')
-                  const _data = index > -1 ?
-                    _.slice(
-                      flatRows.map(d => {
-                        const { original } = { ...d }
-                        const { total_value } = { ...original }
-                        return { ...original, value_share: (total_value > 0 ? total_value : 0) * 100 / total }
-                      }),
-                      0, index + 1,
-                    ) :
-                    []
-                  const { value_share } = { ..._.last(_data) }
-                  const total_share = value_share // _.sumBy(_data, 'value_share')
-                  return (
-                    <div className="flex items-start space-x-1.5 mt-0.5">
-                      <div className="w-20 bg-zinc-200 dark:bg-zinc-800 mt-0.5">
-                        <div style={{ width: `${total_share}%` }}>
-                          <ProgressBar
-                            width={(total_share - value_share) * 100 / total_share}
-                            color="bg-blue-200"
-                            backgroundClassName="h-7 bg-blue-500"
-                            className="h-7"
-                          />
-                        </div>
-                      </div>
-                      <NumberDisplay
-                        value={total_share}
-                        format="0,0.0"
-                        suffix="%"
-                        noTooltip={true}
-                        className="text-slate-600 dark:text-slate-200 text-2xs font-medium"
-                      />
-                    </div>
-                  )
-                },
-                headerClassName: 'whitespace-nowrap',
-              },
-              {
-                Header: 'By Asset',
-                accessor: 'liquidity_by_assets',
-                sortType: (a, b) => a.original.total_value > b.original.total_value ? 1 : -1,
-                Cell: props => {
-                  const { value, row } = { ...props }
-                  const { liquidity_utilization_by_assets } = { ...row.original }
-                  return (
-                    <div className="min-w-max grid grid-cols-2 gap-2">
-                      {toArray(value).map((d, i) => {
-                        const { asset, value } = { ...d }
-                        const utilization = toArray(liquidity_utilization_by_assets).find(_d => _d.asset === asset)?.value
-                        const asset_data = getAssetData(asset, assets_data)
-                        const { symbol, image } = { ...asset_data }
-                        return (
-                          <div key={i} className="flex items-start space-x-2 mt-0.5">
-                            <Image
-                              src={image}
-                              width={18}
-                              height={18}
-                              className="rounded-full"
-                            />
-                            <div className="flex flex-col space-y-0.5">
-                              <span className="text-xs font-semibold">
-                                {symbol}
-                              </span>
-                              <div className="flex flex-col">
-                                <div className="h-4 flex items-center space-x-1">
-                                  <span className="text-slate-400 dark:text-slate-500 text-2xs font-medium">
-                                    Liquidity:
-                                  </span>
-                                  <NumberDisplay
-                                    value={value}
-                                    prefix="$"
-                                    noTooltip={true}
-                                    className="text-2xs font-semibold"
-                                  />
-                                </div>
-                                {raw_volumes && (
-                                  <div className="h-4 flex items-center space-x-1">
-                                    <span className="text-slate-400 dark:text-slate-500 text-2xs font-medium">
-                                      Utilization:
-                                    </span>
-                                    <NumberDisplay
-                                      value={utilization}
-                                      format="0,0.00a"
-                                      className="text-2xs font-semibold"
-                                    />
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )
-                },
-                headerClassName: 'w-64 whitespace-nowrap',
-              },
-              {
-                Header: 'By Chain',
-                accessor: 'liquidity_by_chains',
-                sortType: (a, b) => a.original.total_value > b.original.total_value ? 1 : -1,
-                Cell: props => {
-                  const { value, row } = { ...props }
-                  const { liquidity_utilization_by_chains } = { ...row.original }
-                  return (
-                    <div className="min-w-max grid grid-cols-2 gap-2">
-                      {toArray(value).map((d, i) => {
-                        const { chain, value } = { ...d }
-                        const utilization = toArray(liquidity_utilization_by_chains).find(_d => _d.chain === chain)?.value
-                        const chain_data = getChainData(chain, chains_data)
-                        const { name, image } = { ...chain_data }
-                        return (
-                          <div key={i} className="flex items-start space-x-2 mt-0.5">
-                            <Image
-                              src={image}
-                              width={18}
-                              height={18}
-                              className="rounded-full"
-                            />
-                            <div className="flex flex-col space-y-0.5">
-                              <span className="text-xs font-semibold">
-                                {name}
-                              </span>
-                              <div className="flex flex-col">
-                                <div className="h-4 flex items-center space-x-1">
-                                  <span className="text-slate-400 dark:text-slate-500 text-2xs font-medium">
-                                    Liquidity:
-                                  </span>
-                                  <NumberDisplay
-                                    value={value}
-                                    prefix="$"
-                                    noTooltip={true}
-                                    className="text-2xs font-semibold"
-                                  />
-                                </div>
-                                {raw_volumes && (
-                                  <div className="h-4 flex items-center space-x-1">
-                                    <span className="text-slate-400 dark:text-slate-500 text-2xs font-medium">
-                                      Utilization:
-                                    </span>
-                                    <NumberDisplay
-                                      value={utilization}
-                                      format="0,0.00a"
-                                      className="text-2xs font-semibold"
-                                    />
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )
-                },
-                headerClassName: 'w-64 whitespace-nowrap',
-              },
-              {
-                Header: 'Transfers',
-                accessor: 'total_transfers',
-                sortType: (a, b) => a.original.total_transfers > b.original.total_transfers ? 1 : -1,
-                Cell: props => {
-                  const { value } = { ...props }
-                  return (
-                    <div className="text-right">
-                      {isNumber(value) ?
-                        <NumberDisplay value={value} className="text-base font-bold" /> :
-                        <span className="text-slate-400 dark:text-slate-500">
-                          -
-                        </span>
-                      }
-                    </div>
-                  )
-                },
-                headerClassName: 'justify-end whitespace-nowrap text-right',
-              },
-              {
-                Header: `Volume ${NUM_STATS_DAYS}D`,
-                accessor: 'total_volume',
-                sortType: (a, b) => a.original.total_volume > b.original.total_volume ? 1 : -1,
-                Cell: props => {
-                  const { value } = { ...props }
-                  return (
-                    <div className="text-right">
-                      {raw_volumes ?
-                        isNumber(value) ?
-                          <NumberDisplay
-                            value={value}
-                            prefix="$"
-                            noTooltip={true}
-                            className="text-base font-bold"
-                          /> :
-                          <span className="text-slate-400 dark:text-slate-500">
-                            -
-                          </span> :
-                          <div className="flex justify-end">
-                            <Spinner width={18} height={18} />
-                          </div>
-                      }
-                    </div>
-                  )
-                },
-                headerClassName: 'justify-end whitespace-nowrap text-right',
-              },
-              {
-                Header: 'Supported Chains',
-                accessor: 'supported_chains',
-                sortType: (a, b) => toArray(a.original.supported_chains).length > toArray(b.original.supported_chains).length ? 1 : -1,
-                Cell: props => {
-                  const { value } = { ...props }
-                  return value && (
-                    <div className={`xl:w-${value.length > 5 ? '56' : '32'} flex flex-wrap items-center justify-end ml-auto`}>
-                      {value.length > 0 ?
-                        toArray(
-                          value.map((id, i) => {
-                            const { name, image } = { ...getChainData(id, chains_data) }
-                            return image && (
-                              <div key={i} title={name} className="mr-1">
-                                <Image
-                                  src={image}
-                                  width={24}
-                                  height={24}
-                                  className="rounded-full"
-                                />
-                              </div>
-                            )
-                          })
-                        ) :
-                        <span className="text-slate-400 dark:text-slate-500">
-                          No chains supported
-                        </span>
-                      }
-                    </div>
-                  )
-                },
-                headerClassName: 'justify-end whitespace-nowrap text-right',
-              },
-            ].filter(c => !mode ? !['share', 'liquidity_by_assets', 'liquidity_by_chains', 'total_transfers'].includes(c.accessor) : !['total_transfers'].includes(c.accessor))}
-            data={routers}
-            defaultPageSize={50}
-            noPagination={routers.length <= 10}
-            className="no-border no-shadow"
-          /> :
-          <div className="loading">
-            <Spinner width={32} height={32} />
-          </div>
-        }
+      <StackGrid
+        columnWidth={444}
+        gutterWidth={16}
+        gutterHeight={16}
+        className="hidden sm:block"
+      >
+        {routersComponent}
+      </StackGrid>
+      <div className="block sm:hidden space-y-3">
+        {routersComponent}
       </div>
     </>
   )

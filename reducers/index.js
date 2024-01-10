@@ -3,31 +3,33 @@ import { combineReducers } from 'redux'
 import preferences from './preferences'
 import chains from './chains'
 import assets from './assets'
-import pool_assets from './pool-assets'
-import gas_tokens_price from './gas-tokens-price'
+import tokens from './tokens'
 import ens from './ens'
-import router_asset_balances from './router-asset-balances'
-import pools from './pools'
-import rpc_providers from './rpc-providers'
-import dev from './dev'
+import status from './status'
+import chains_status from './chains-status'
+import routers_status from './routers-status'
+import asset_balances from './asset-balances'
+import routers_assets from './routers-assets'
+import stats from './stats'
+import transactions from './transactions'
+import sdk from './sdk'
+import rpcs from './rpcs'
 import wallet from './wallet'
-import balances from './balances'
-import web3 from './web3'
-import latest_bumped_transfers from './latest-bumped-transfers'
 
 export default combineReducers({
   preferences,
   chains,
   assets,
-  pool_assets,
-  gas_tokens_price,
+  tokens,
   ens,
-  router_asset_balances,
-  pools,
-  rpc_providers,
-  dev,
+  status,
+  chains_status,
+  routers_status,
+  asset_balances,
+  routers_assets,
+  stats,
+  transactions,
+  sdk,
+  rpcs,
   wallet,
-  balances,
-  web3,
-  latest_bumped_transfers,
 })

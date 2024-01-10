@@ -1,5 +1,5 @@
 .skeleton {
-  @apply bg-slate-100 dark:bg-slate-800;
+  @apply bg-gray-100 dark:bg-gray-800 rounded;
 
   position: relative;
   overflow: hidden;
@@ -23,7 +23,6 @@
     content: '';
   }
 }
-
 @keyframes shimmer {
   100% {
     transform: translateX(100%);

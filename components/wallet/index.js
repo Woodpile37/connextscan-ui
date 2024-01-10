@@ -1,169 +1,329 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useSelector, useDispatch, shallowEqual } from 'react-redux'
-import { useWeb3Modal } from '@web3modal/wagmi/react'
-import { usePublicClient, useNetwork, useSwitchNetwork, useWalletClient, useAccount, useDisconnect, useSignMessage } from 'wagmi'
-import { providers } from 'ethers'
-import { hashMessage, parseAbiItem, verifyMessage } from 'viem'
 
-import blocked_addresses from '../../config/blocked_addresses.json'
-import { find } from '../../lib/utils'
+import Web3Modal from 'web3modal'
+import WalletConnectProvider from '@walletconnect/web3-provider'
+import Portis from '@portis/web3'
+import Coinbase from '@coinbase/wallet-sdk'
+import { providers, utils } from 'ethers'
+import { IoWalletOutline } from 'react-icons/io5'
+
 import { WALLET_DATA, WALLET_RESET } from '../../reducers/types'
 
-const publicClientToProvider = publicClient => {
-  const { chain, transport } = { ...publicClient }
-  const network = {
-    chainId: chain.id,
-    name: chain.name,
-    ensAddress: chain.contracts?.ensRegistry?.address,
-  }
-  if (transport.type === 'fallback') {
-    return new providers.FallbackProvider(transport.transports.map(({ value }) => new providers.JsonRpcProvider(value?.url, network)))
-  }
-  return new providers.JsonRpcProvider(transport.url, network)
-}
-
-const walletClientToSigner = walletClient => {
-  const { account, chain, transport } = { ...walletClient }
-  const network = {
-    chainId: chain.id,
-    name: chain.name,
-    ensAddress: chain.contracts?.ensRegistry?.address,
-  }
-  const provider = new providers.Web3Provider(transport, network)
-  const signer = provider.getSigner(account.address)
-  return signer
-}
-
-export default (
-  {
-    hidden = false,
-    disabled = false,
-    connectChainId,
-    onSwitch,
-    children,
-    className = '',
+const providerOptions = {
+  walletconnect: {
+    package: WalletConnectProvider,
+    options: {
+      rpc: {
+        1: `https://mainnet.infura.io/v3/${process.env.NEXT_PUBLIC_INFURA_ID}`,
+        56: 'https://bsc-dataseed.binance.org',
+        137: 'https://polygon-rpc.com',
+        42161: 'https://arb1.arbitrum.io/rpc',
+        42170: 'https://nova.arbitrum.io/rpc',
+        10: 'https://mainnet.optimism.io',
+        43114: 'https://api.avax.network/ext/bc/C/rpc',
+        250: 'https://rpc.ftm.tools',
+        100: 'https://rpc.gnosischain.com',
+        1284: 'https://rpc.api.moonbeam.network',
+        1285: 'https://rpc.api.moonriver.moonbeam.network',
+        122: 'https://rpc.fuse.io',
+        2001: 'https://rpc.c1.milkomeda.com:8545',
+        288: 'https://mainnet.boba.network',
+        1666600000: 'https://api.harmony.one',
+        192837465: 'https://mainnet.gather.network',
+        25: 'https://evm.cronos.org',
+        9001: 'https://eth.bd.evmos.org:8545',
+        3: `https://ropsten.infura.io/v3/${process.env.NEXT_PUBLIC_INFURA_ID}`,
+        4: `https://rinkey.infura.io/v3/${process.env.NEXT_PUBLIC_INFURA_ID}`,
+        5: `https://goerli.infura.io/v3/${process.env.NEXT_PUBLIC_INFURA_ID}`,
+        42: `https://kovan.infura.io/v3/${process.env.NEXT_PUBLIC_INFURA_ID}`,
+        97: 'https://data-seed-prebsc-1-s1.binance.org:8545',
+        80001: 'https://rpc-mumbai.matic.today',
+        421611: 'https://rinkeby.arbitrum.io/rpc',
+        69: 'https://kovan.optimism.io',
+        43113: 'https://api.avax-test.network/ext/bc/C/rpc',
+        4002: 'https://rpc.testnet.fantom.network',
+        1287: 'https://rpc.api.moonbase.moonbeam.network',
+      },
+    },
+    display: {
+      description: 'Gnosis Safe is not supported.',
+    },
   },
-) => {
+  portis: process.env.NEXT_PUBLIC_PORTIS_ID && {
+    package: Portis,
+    options: {
+      id: process.env.NEXT_PUBLIC_PORTIS_ID,
+    },
+  },
+  walletlink: process.env.NEXT_PUBLIC_INFURA_ID && {
+    package: Coinbase,
+    options: {
+      infuraId: process.env.NEXT_PUBLIC_INFURA_ID,
+      appName: 'Coinbase Wallet',
+      appLogoUrl: '/logos/wallets/coinbase.svg',
+    },
+  },
+}
+
+const chainIdToNetwork = chain_id => {
+  return {
+    1: 'mainnet',
+    56: 'binance',
+    137: 'matic',
+    42161: 'arbitrum',
+    // 42170: 'arbitrum-nova',
+    10: 'optimism',
+    43114: 'avalanche-fuji-mainnet',
+    250: 'fantom',
+    100: 'xdai',
+    // 1284: 'moonbeam',
+    // 1285: 'moonriver',
+    // 122: 'fuse',
+    // 2001: 'milkomeda',
+    // 288: 'boba',
+    // 1666600000: 'harmony-one',
+    // 192837465: 'gather',
+    // 9001: 'evmos',
+    9001: '',
+    3: 'ropsten',
+    4: 'rinkeby',
+    5: 'goerli',
+    42: 'kovan',
+    80001: 'mumbai',
+    421611: 'arbitrum-rinkeby',
+  }[chain_id]
+}
+
+let web3Modal
+
+export default function Wallet({ chainIdToConnect, main, hidden, disabled = false, buttonConnectTitle, buttonConnectClassName, buttonDisconnectTitle, buttonDisconnectClassName, onChangeNetwork }) {
   const dispatch = useDispatch()
-  const { wallet } = useSelector(state => ({ wallet: state.wallet }), shallowEqual)
+  const { preferences, chains, wallet } = useSelector(state => ({ preferences: state.preferences, chains: state.chains, wallet: state.wallet }), shallowEqual)
+  const { chains_data } = { ...chains }
+  const { theme } = { ...preferences }
   const { wallet_data } = { ...wallet }
-  const { chain_id, provider } = { ...wallet_data }
+  const { provider, web3_provider, chain_id } = { ...wallet_data }
 
-  const { open } = useWeb3Modal()
-  const _provider = usePublicClient()
-  const { chain } = useNetwork()
-  const { switchNetwork } = useSwitchNetwork()
-  const { data: signer } = useWalletClient()
-  const { address } = useAccount()
-  const { disconnect } = useDisconnect()
-  const chainId = chain?.id
-  const message = process.env.NEXT_PUBLIC_APP_NAME
-  const { data: signature, signMessage } = useSignMessage({ message })
+  const [defaultChainId, setDefaultChainId] = useState(null)
 
-  const [signatureValid, setSignatureValid] = useState()
+  useEffect(() => {
+    if (chainIdToConnect && chainIdToConnect !== defaultChainId) {
+      setDefaultChainId(chainIdToConnect)
+    }
+  }, [chainIdToConnect])
 
-  const validateSignature = async () => {
-    try {
-      const isContract = !!(await _provider.getBytecode({ address }))
-      if (isContract) {
-        const response = await _provider.readContract({
-          address,
-          abi: [parseAbiItem('function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)')],
-          functionName: 'isValidSignature',
-          args: [hashMessage(message), signature],
-        })
-        // https://eips.ethereum.org/EIPS/eip-1271
-        const isValid = response === '0x1626ba7e'
-        setSignatureValid(isValid)
-      }
-      else {
-        const isValid = await verifyMessage({ address, message, signature })
-        setSignatureValid(isValid)
-      }
-    } catch (error) {}
-  }
-
-  useEffect(
-    () => {
-      if (chainId && signer && address && !find(address, blocked_addresses)) {
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (web3_provider) {
         dispatch({
           type: WALLET_DATA,
-          value: {
-            chain_id: chainId,
-            provider: publicClientToProvider(_provider),
-            ethereum_provider: window?.ethereum,
-            signer: walletClientToSigner(signer),
-            address,
-          },
+          value: { default_chain_id: defaultChainId },
         })
       }
-      else {
-        dispatch({ type: WALLET_RESET })
-      }
-    },
-    [chainId, signer, address],
-  )
 
-  useEffect(
-    () => {
-      if (_provider && !signatureValid) {
-        validateSignature()
+      if (window.clover) {
+        providerOptions['custom-clover'] = {
+          display: {
+            name: 'Clover',
+            logo: '/logos/wallets/clover.png',
+          },
+          package: async () => {
+            let provider = null
+            if (typeof window.clover !== 'undefined') {
+              provider = window.clover
+              try {
+                await provider.request({ method: 'eth_requestAccounts' })
+              } catch (error) {
+                throw new Error('User Rejected')
+              }
+            } else if (typeof window.ethereum !== 'undefined') {
+              provider = window.ethereum
+              try {
+                await provider.request({ method: 'eth_requestAccounts' })
+              } catch (error) {
+                throw new Error('User Rejected')
+              }
+            } else if (window.web3) {
+              provider = window.web3.currentProvider
+            } else if (window.celo) {
+              provider = window.celo
+            } else {
+              throw new Error('No Web3 Provider found')
+            }
+            return provider
+          },
+          connector: async (ProviderPackage, options) => {
+            const provider = new ProviderPackage(options)
+            try {
+              await provider.enable()
+            } catch (error) {}
+            return provider
+          },
+        }
       }
-    },
-    [_provider, signatureValid],
-  )
+
+      web3Modal = new Web3Modal({
+        network: chainIdToNetwork(defaultChainId) || 'mainnet',
+        cacheProvider: true,
+        providerOptions,
+      })
+    }
+  }, [defaultChainId])
+
+  useEffect(() => {
+    if (web3Modal?.cachedProvider) {
+      connect()
+    }
+  }, [web3Modal])
+
+  useEffect(() => {
+    const update = async () => {
+      if (web3Modal) {
+        await web3Modal.updateTheme(theme)
+      }
+    }
+
+    update()
+  }, [theme])
+
+  const connect = useCallback(async () => {
+    const provider = await web3Modal.connect()
+    const web3Provider = new providers.Web3Provider(provider)
+
+    const signer = web3Provider.getSigner()
+    const network = await web3Provider.getNetwork()
+    const address = await signer.getAddress()
+
+    dispatch({
+      type: WALLET_DATA,
+      value: {
+        provider,
+        web3_provider: web3Provider,
+        signer,
+        chain_id: network.chainId,
+        address,
+      },
+    })
+  }, [web3Modal])
+
+  const disconnect = useCallback(async (e, is_reestablish) => {
+    if (web3Modal && !is_reestablish) {
+      await web3Modal.clearCachedProvider()
+    }
+
+    if (provider?.disconnect && typeof provider.disconnect === 'function') {
+      await provider.disconnect()
+    }
+
+    dispatch({
+      type: WALLET_RESET,
+    })
+  }, [web3Modal, provider])
+
+  const switchNetwork = async () => {
+    if (chainIdToConnect && chainIdToConnect !== chain_id && provider) {
+      try {
+        await provider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: utils.hexValue(chainIdToConnect) }],
+        })
+      } catch (error) {
+        if (error.code === 4902) {
+          try {
+            await provider.request({
+              method: 'wallet_addEthereumChain',
+              params: chains_data?.find(c => c.chain_id === chainIdToConnect)?.provider_params,
+            })
+          } catch (error) {}
+        }
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (provider?.on) {
+      const handleChainChanged = chainId => {
+        if (!chainId) {
+          disconnect()
+        }
+        else {
+          connect()
+        }
+      }
+
+      const handleAccountsChanged = accounts => {
+        if (!accounts[0]) {
+          disconnect()
+        }
+        else {
+          dispatch({
+            type: WALLET_DATA,
+            value: {
+              address: accounts[0],
+            },
+          })
+        }
+      }
+
+      const handleDisconnect = e => {
+        disconnect(e, e.code === 1013)
+
+        if (e.code === 1013) {
+          connect()
+        }
+      }
+
+      provider.on('chainChanged', handleChainChanged)
+      provider.on('accountsChanged', handleAccountsChanged)
+      provider.on('disconnect', handleDisconnect)
+
+      return () => {
+        if (provider.removeListener) {
+          provider.removeListener('chainChanged', handleChainChanged)
+          provider.removeListener('accountsChanged', handleAccountsChanged)
+          provider.removeListener('disconnect', handleDisconnect)
+        }
+      }
+    }
+  }, [provider, disconnect])
 
   return !hidden && (
     <>
-      {provider ?
-        connectChainId && connectChainId !== chain_id ?
+      {web3_provider ?
+        !main && chainIdToConnect ?
           <button
             disabled={disabled}
-            onClick={
-              () => {
-                switchNetwork(connectChainId)
-                dispatch({
-                  type: WALLET_DATA,
-                  value: {
-                    chain_id: connectChainId,
-                    provider: _provider,
-                    ethereum_provider: window?.ethereum,
-                    signer,
-                    address,
-                  },
-                })
-                if (onSwitch) {
-                  onSwitch()
-                }
+            onClick={() => {
+              switchNetwork()
+
+              if (onChangeNetwork) {
+                onChangeNetwork()
               }
-            }
-            className={className}
+            }}
+            className={buttonDisconnectClassName || 'bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg whitespace-nowrap font-medium py-1 px-2'}
           >
-            {children || (
-              <div className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded whitespace-nowrap text-slate-600 dark:text-slate-200 py-1 px-2">
-                Switch Network
-              </div>
-            )}
-          </button> :
+            {buttonDisconnectTitle || 'Wrong Network'}
+          </button>
+          :
           <button
             disabled={disabled}
             onClick={disconnect}
-            className={className}
+            className={buttonDisconnectClassName || 'bg-gray-100 hover:bg-gray-200 dark:bg-red-600 dark:hover:bg-red-700 rounded-lg font-medium py-1 px-2'}
           >
-            {children || (
-              <div className="bg-red-500 hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-500 rounded whitespace-nowrap text-white py-1 px-2">
-                Disconnect
-              </div>
-            )}
-          </button> :
+            {buttonDisconnectTitle || 'Disconnect'}
+          </button>
+        :
         <button
           disabled={disabled}
-          onClick={open}
-          className={className}
+          onClick={connect}
+          className={buttonConnectClassName || 'bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 rounded-lg text-white font-medium py-1 px-2'}
+          style={buttonConnectClassName?.includes('w-full') ? null : { width: 'max-content' }}
         >
-          {children || (
-            <div className="bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-500 rounded whitespace-nowrap text-white py-1 px-2">
-              Connect
+          {buttonConnectTitle || (
+            <div className="flex items-center space-x-1.5">
+              <span>Connect</span>
+              <IoWalletOutline size={18} />
             </div>
           )}
         </button>
